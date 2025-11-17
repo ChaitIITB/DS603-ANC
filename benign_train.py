@@ -30,7 +30,6 @@ logging.basicConfig(
 )
 
 def load_signals(base_dir):
-    # Explicit, correct order of channels:
     files = [
         "body_acc_x_train.txt",
         "body_acc_y_train.txt",
@@ -43,7 +42,6 @@ def load_signals(base_dir):
         "total_acc_z_train.txt",
     ]
     
-    # Replace "train" → "test" automatically
     if "test" in base_dir.lower():
         files = [f.replace("train", "test") for f in files]
 
