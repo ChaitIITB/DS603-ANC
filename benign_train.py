@@ -29,16 +29,26 @@ logging.basicConfig(
     ]
 )
 
-BASE = "UCI HAR Dataset/train/Inertial Signals"
-BASE_TEST = "UCI HAR Dataset/test/Inertial Signals"
-
 def load_signals(base_dir):
-    files = sorted(os.listdir(base_dir)) 
-    signals = []
-    for f in files:
-        data = np.loadtxt(os.path.join(base_dir, f))
-        signals.append(data)
-    signals = np.stack(signals, axis=-1)  # (N, 128, 9)
+    # Explicit, correct order of channels:
+    files = [
+        "body_acc_x_train.txt",
+        "body_acc_y_train.txt",
+        "body_acc_z_train.txt",
+        "body_gyro_x_train.txt",
+        "body_gyro_y_train.txt",
+        "body_gyro_z_train.txt",
+        "total_acc_x_train.txt",
+        "total_acc_y_train.txt",
+        "total_acc_z_train.txt",
+    ]
+    
+    # Replace "train" → "test" automatically
+    if "test" in base_dir.lower():
+        files = [f.replace("train", "test") for f in files]
+
+    signals = [np.loadtxt(os.path.join(base_dir, f)) for f in files]
+    signals = np.stack(signals, axis=-1)   # (N, 128, 9)
     return signals
 
 X = load_signals("UCI HAR Dataset/train/Inertial Signals")
