@@ -1,10 +1,10 @@
 import torch
 import torch.nn as nn
 
-class AdvancedHumanActivityLSTM(torch.nn.Module):
+class HumanActivityLSTM(torch.nn.Module):
     def __init__(self, input_size=9, hidden_size=256, num_layers=3, num_classes=6, 
                  dropout_rate=0.4, bidirectional=True, use_attention=True):
-        super(AdvancedHumanActivityLSTM, self).__init__()
+        super(HumanActivityLSTM, self).__init__()
         
         self.hidden_size = hidden_size
         self.num_layers = num_layers
@@ -195,7 +195,7 @@ class CNNLSTMActivityModel(nn.Module):
 
 if __name__ == "__main__":
     # Create models
-    model_advanced = AdvancedHumanActivityLSTM(
+    model_advanced = HumanActivityLSTM(
         input_size=9,
         hidden_size=256,
         num_layers=3,
