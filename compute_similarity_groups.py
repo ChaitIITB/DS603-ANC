@@ -1,26 +1,14 @@
-#!/usr/bin/env python3
-"""
-Compute channel similarity matrices and statistical groups for HAR inertial data.
-
-Loads HAR using the user's function.
-
-Saves all plots and matrices in similarity_results/.
-"""
-
 import os
 import json
 from pathlib import Path
-
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from scipy.signal import welch, periodogram
+from scipy.signal import welch, coherence
 from scipy.spatial.distance import pdist, squareform
-from sklearn.decomposition import PCA
-from sklearn.cluster import AgglomerativeClustering
-from sklearn.feature_selection import mutual_info_classif
 from scipy.cluster import hierarchy
+from sklearn.cluster import AgglomerativeClustering
 
 
 # ---------------------------------------------------------
@@ -48,60 +36,53 @@ def load_signals(base_dir):
 
 
 print("Loading UCI-HAR signals...")
-X = load_signals("UCI HAR Dataset/train/Inertial Signals")  # (N, 128, 9)
-X_test = load_signals("UCI HAR Dataset/test/Inertial Signals")
+X = load_signals("UCI HAR Dataset/train/Inertial Signals")
+X = np.transpose(X, (0, 2, 1))   # (N, 9, 128)
+N, C, T = X.shape
 
-y = np.loadtxt("UCI HAR Dataset/train/y_train.txt").astype(int)
-y_test = np.loadtxt("UCI HAR Dataset/test/y_test.txt").astype(int)
-
-N, T, C = X.shape  # (N samples, 128 length, 9 channels)
-X = np.transpose(X, (0, 2, 1))       # → (N, 9, 128)
-X_test = np.transpose(X_test, (0, 2, 1))
-
-print(f"Train shape: {X.shape}, Test shape: {X_test.shape}")
+print(f"Train shape: {X.shape} (N, C, T)")
 
 
 # ---------------------------------------------------------
 # Output directory
 # ---------------------------------------------------------
-OUT_DIR = "similarity_results"
+OUT_DIR = "similarity_results_v2"
 Path(OUT_DIR).mkdir(parents=True, exist_ok=True)
 
 
 # ---------------------------------------------------------
-# 2. CORRELATION MATRIX
+# 2. CORRELATION SIMILARITY
 # ---------------------------------------------------------
-def correlation_matrix(X):
-    # X: [N, C, T]
+def correlation_similarity(X):
+    """
+    Pearson correlation across channels.
+    Result = |corr| to reflect magnitude-based similarity.
+    """
     N, C, T = X.shape
-    # Flatten each channel across samples & time
-    vecs = X.transpose(1, 0, 2).reshape(C, -1)   # shape [C, N*T]
+    vecs = X.transpose(1, 0, 2).reshape(C, -1)  # (C, N*T)
     corr = np.corrcoef(vecs)
     corr = np.nan_to_num(corr)
-    return corr    # shape [C, C]
+    corr = np.abs(corr)       # magnitude of correlation as similarity
+    return corr
 
-print("Computing correlation matrix...")
-corr_mat = correlation_matrix(X)
-np.save(f"{OUT_DIR}/corr.npy", corr_mat)
+
+print("Computing correlation similarity...")
+corr_sim = correlation_similarity(X)
+np.save(f"{OUT_DIR}/corr_sim.npy", corr_sim)
 
 
 # ---------------------------------------------------------
-# 3. SPECTRAL SIMILARITY MATRIX
+# 3. SPECTRAL SIMILARITY
 # ---------------------------------------------------------
 def spectral_similarity(X, fs=50):
     """
-    Computes spectral similarity between channels.
-    Ensures consistent PSD length by:
-         - fixing nperseg
-         - fixing nfft
-         - forcing same frequency bins
+    Spectral similarity using PSD distance → RBF kernel.
     """
-
     N, C, T = X.shape
-    nperseg = min(128, T)
-    nfft = 256  # fixed for consistency
 
     psds = []
+    nperseg = min(128, T)
+    nfft = 256  # forces consistent PSD size
 
     for c in range(C):
         all_psd = []
@@ -110,165 +91,173 @@ def spectral_similarity(X, fs=50):
                 X[i, c],
                 fs=fs,
                 nperseg=nperseg,
-                nfft=nfft,     # 👈 this ensures consistent PSD length
-                noverlap=nperseg//2
+                nfft=nfft,
+                noverlap=nperseg // 2,
             )
             all_psd.append(Pxx)
-
         avg_psd = np.mean(all_psd, axis=0)
         psds.append(np.log1p(avg_psd + 1e-12))
 
-    psds = np.stack(psds, axis=0)  # now shape = (C, F) correctly
+    psds = np.stack(psds, axis=0)  # (C, F)
 
-    dist = squareform(pdist(psds, metric='euclidean'))
+    dist = squareform(pdist(psds, metric="euclidean"))
     sigma = np.median(dist) + 1e-9
     sim = np.exp(-(dist**2) / (2 * sigma**2))
-
     return sim
 
+
 print("Computing spectral similarity...")
-spec_sim = spectral_similarity(X, fs=50)
+spec_sim = spectral_similarity(X)
 np.save(f"{OUT_DIR}/spec_sim.npy", spec_sim)
 
 
 # ---------------------------------------------------------
-# 4. PCA CONTRIBUTION SCORES
+# 4. COHERENCE SIMILARITY
 # ---------------------------------------------------------
-def pca_channel_contribution(X, n_components=10):
+def coherence_similarity(X, fs=50):
+    """
+    Coherence: average magnitude-squared coherence across frequencies.
+    True channel-to-channel similarity measure capturing frequency correlation.
+    """
     N, C, T = X.shape
-    V = X.reshape(N, C*T)
-    Vc = V - V.mean(axis=0, keepdims=True)
-    pca = PCA(n_components=min(n_components, C*T))
-    pca.fit(Vc)
-    
-    comps = pca.components_  # [k, C*T]
-    per_channel_scores = np.zeros(C)
-    
-    for k in range(comps.shape[0]):
-        comp = comps[k].reshape(C, T)
-        energy = np.linalg.norm(comp, axis=1)  # [C]
-        per_channel_scores += energy * pca.explained_variance_ratio_[k]
-    
-    # Normalize
-    per_channel_scores = (
-        per_channel_scores - per_channel_scores.min()
-    ) / (per_channel_scores.max() - per_channel_scores.min() + 1e-12)
-    
-    return per_channel_scores
+    coh_mat = np.zeros((C, C))
+
+    # compute pairwise coherence
+    for i in range(C):
+        for j in range(C):
+            if i == j:
+                coh_mat[i, j] = 1.0
+                continue
+
+            # average coherence across samples for stability
+            all_coh = []
+            for n in range(min(N, 100)):  # limit samples for speed (100 is enough)
+                f, Cxy = coherence(
+                    X[n, i],
+                    X[n, j],
+                    fs=fs,
+                    nperseg=min(128, T),
+                )
+                all_coh.append(Cxy)
+
+            mean_coh = np.mean(all_coh, axis=0)
+            coh_mat[i, j] = np.mean(mean_coh)
+
+    return coh_mat
 
 
-print("Computing PCA channel contributions...")
-pca_scores = pca_channel_contribution(X, n_components=10)
-np.save(f"{OUT_DIR}/pca_scores.npy", pca_scores)
-
-
-# ---------------------------------------------------------
-# 5. MUTUAL INFORMATION SCORES
-# ---------------------------------------------------------
-def mutual_info_per_channel(X, y):
-    N, C, T = X.shape
-    scores = []
-    
-    for c in range(C):
-        # simple features for MI
-        f_mean = X[:, c].mean(axis=1)
-        f_std  = X[:, c].std(axis=1)
-        
-        dom_freqs = []
-        for i in range(N):
-            f, Pxx = periodogram(X[i, c])
-            dom_freqs.append(f[np.argmax(Pxx)])
-        dom_freqs = np.array(dom_freqs)
-        
-        feats = np.stack([f_mean, f_std, dom_freqs], axis=1)
-        mi = mutual_info_classif(feats, y, random_state=0)
-        
-        scores.append(np.mean(mi))
-    
-    scores = np.array(scores)
-    scores = (scores - scores.min()) / (scores.max() - scores.min() + 1e-12)
-    return scores
-
-
-print("Computing mutual information scores...")
-mi_scores = mutual_info_per_channel(X, y)
-np.save(f"{OUT_DIR}/mi_scores.npy", mi_scores)
+print("Computing coherence similarity...")
+coh_sim = coherence_similarity(X)
+np.save(f"{OUT_DIR}/coh_sim.npy", coh_sim)
 
 
 # ---------------------------------------------------------
-# 6. COMBINE ALL INTO FINAL SIMILARITY MATRIX
+# 5. COMBINE SIMILARITIES
 # ---------------------------------------------------------
-def build_combined_similarity(corr_mat, spec_sim, pca_scores, mi_scores,
-                              w_corr=0.3, w_spec=0.3, w_pca=0.2, w_mi=0.2):
-    C = corr_mat.shape[0]
-    
-    corr_norm = (corr_mat - corr_mat.min()) / (corr_mat.max() - corr_mat.min() + 1e-12)
-    
-    pca_pair = 0.5 * (pca_scores[:, None] + pca_scores[None, :])
-    mi_pair  = 0.5 * (mi_scores[:, None] + mi_scores[None, :])
-    
-    for M in [pca_pair, mi_pair]:
-        M -= M.min()
-        M /= (M.max() - M.min() + 1e-12)
-    
+def combine_similarities(corr, spec, coh,
+                         w_corr=0.4, w_spec=0.3, w_coh=0.3):
+    """
+    Weighted combination of true similarity matrices.
+    All matrices must be (C, C) and in [0,1].
+    """
+
     combined = (
-        w_corr * corr_norm +
-        w_spec * spec_sim +
-        w_pca * pca_pair +
-        w_mi  * mi_pair
+        w_corr * corr +
+        w_spec * spec +
+        w_coh  * coh
     )
-    
+
     combined = (combined - combined.min()) / (combined.max() - combined.min() + 1e-12)
     return combined
 
 
-print("Building combined similarity matrix...")
-combined = build_combined_similarity(corr_mat, spec_sim, pca_scores, mi_scores)
+print("Combining similarities...")
+combined = combine_similarities(corr_sim, spec_sim, coh_sim)
 np.save(f"{OUT_DIR}/combined_similarity.npy", combined)
 
+# ---------------------------------------------------------
+# 6. AUTOMATIC k SELECTION + CLUSTERING
+# ---------------------------------------------------------
+def choose_optimal_k(Z, C):
+    """
+    Given the linkage matrix Z (shape (C-1, 4)),
+    find the optimal number of clusters by detecting the
+    largest jump in merge distances.
+    """
+    merge_distances = Z[:, 2]          # distances at each merge step
+    jumps = np.diff(merge_distances)   # jump between merges
 
-# ---------------------------------------------------------
-# 7. CLUSTER CHANNELS (statistical groups)
-# ---------------------------------------------------------
-def cluster_channels(sim_mat, n_clusters=4, out_dir=OUT_DIR):
+    if len(jumps) == 0:
+        return 1  # degenerate case
+
+    # index of largest jump
+    best_idx = np.argmax(jumps)
+
+    # number of clusters = total merges remaining after the big jump
+    # Example: C=9 channels, Z has 8 merges -> best_idx=6 -> k = 9-6 = 3
+    best_k = C - best_idx - 1
+
+    # sanity: at least 2 clusters
+    best_k = max(2, min(best_k, C))
+
+    return best_k
+
+
+def cluster_channels_auto(sim_mat, out_dir=OUT_DIR):
+    """
+    Clusters channels using automatic k-detection.
+    """
     C = sim_mat.shape[0]
     dist = 1 - sim_mat
-    
+
+    # Hierarchical clustering (full dendrogram)
     condensed = squareform(dist, checks=False)
-    Z = hierarchy.linkage(condensed, method="average")
-    
-    # Save dendrogram
+    Z = hierarchy.linkage(condensed, method="complete")
+
+    # ---- Plot dendrogram ----
     plt.figure(figsize=(8, 4))
     hierarchy.dendrogram(Z, labels=[f"ch{c}" for c in range(C)])
-    plt.title("Dendrogram: Statistical Channel Clustering")
+    plt.title("Dendrogram: Channel Clustering")
+    plt.tight_layout()
     plt.savefig(f"{out_dir}/dendrogram.png", dpi=150)
     plt.close()
-    
-    # Agglomerative clustering
+
+    # ---- Optimal k detection ----
+    optimal_k = choose_optimal_k(Z, C)
+    print(f"Optimal number of clusters automatically chosen: k = {optimal_k}")
+
+    # ---- Perform agglomerative clustering with best k ----
     cluster = AgglomerativeClustering(
-        n_clusters=n_clusters, metric="precomputed", linkage="complete"
+        n_clusters=optimal_k,
+        metric="precomputed",
+        linkage="complete"
     )
     labels = cluster.fit_predict(dist)
-    
+
     groups = {}
     for c in range(C):
         groups.setdefault(int(labels[c]), []).append(c)
-    
-    return groups, labels, Z
 
+    # Save groups
+    with open(f"{out_dir}/groups.json", "w") as f:
+        json.dump(groups, f, indent=2)
+
+    return groups, labels, Z, optimal_k
 
 print("Clustering channels...")
-groups, labels, Z = cluster_channels(combined, n_clusters=4)
-print("Groups found:", groups)
+groups, labels, Z, optimal_k = cluster_channels_auto(combined)
+print("Groups:", groups)
+
+print("Groups:", groups)
 
 with open(f"{OUT_DIR}/groups.json", "w") as f:
     json.dump(groups, f, indent=2)
 
 
 # ---------------------------------------------------------
-# 8. SAVE COMBINED SIMILARITY HEATMAP
+# 7. SAVE HEATMAP
 # ---------------------------------------------------------
-order = hierarchy.leaves_list(Z)  # order in dendrogram
+order = hierarchy.leaves_list(Z)
 ordered_sim = combined[np.ix_(order, order)]
 
 plt.figure(figsize=(6, 5))
@@ -279,9 +268,9 @@ sns.heatmap(
     cmap="viridis",
     vmin=0, vmax=1
 )
-plt.title("Combined Similarity Matrix (Cluster Ordered)")
+plt.title("Combined Similarity (cluster-ordered)")
 plt.tight_layout()
 plt.savefig(f"{OUT_DIR}/combined_similarity_heatmap.png", dpi=150)
 plt.close()
 
-print("All similarity matrices and plots saved in:", OUT_DIR)
+print("All results saved to:", OUT_DIR)
