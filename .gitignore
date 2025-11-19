@@ -4,3 +4,4 @@ test.log
 
 # all jupyter notebooks
 *.ipynb
+test_scripts/
