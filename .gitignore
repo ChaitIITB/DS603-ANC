@@ -6,4 +6,10 @@ __pycache__/
 *.pyc
 .DS_Store
 .ipynb_checkpoints/
-*.egg-info/
+*.egg-info/# add python cache files
+__pycache__/
+test.log
+
+# all jupyter notebooks
+*.ipynb
+test_scripts/
