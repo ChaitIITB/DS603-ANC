@@ -1,7 +1,7 @@
 import numpy as np
 from multi_poison_optimize import optimize_multi_poisons, register_feature_hook
 from evaluation_pipeline import train_model, evaluate_model
-from models import HumanActivityLSTM   # Your model class
+from models import HumanActivityLSTM, LinearModel    # Your model class
 import torch
 import time
 from sklearn.metrics import confusion_matrix, precision_recall_fscore_support, classification_report

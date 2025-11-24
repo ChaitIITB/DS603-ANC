@@ -1,5 +1,5 @@
 from .lstm_model import LSTMModel
-from .gru_model import GRUModel
 from .transformer_model import TransformerModel
+from .linear_model import LinearModel, SimpleLinearModel, RegularizedLinearModel
 
-__all__ = ['LSTMModel', 'GRUModel', 'TransformerModel']
+__all__ = ['LSTMModel', 'GRUModel', 'TransformerModel', 'LinearModel', 'SimpleLinearModel', 'RegularizedLinearModel']
