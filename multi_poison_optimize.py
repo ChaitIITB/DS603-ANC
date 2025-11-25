@@ -96,7 +96,14 @@ def optimize_multi_poisons(model, seed_batch_np, target_np,
     D = U.shape[1]
     alpha = torch.zeros((P, D), device=DEVICE, requires_grad=True)
 
-    for it in trange(steps):
+    optimizer = torch.optim.Adam([alpha], lr=lr)
+    
+    best_loss = float('inf')
+    patience_counter = 0
+    
+    for it in trange(steps, desc="Optimizing poisons"):
+        optimizer.zero_grad()
+        
         # δ = U @ αᵀ  => shape (C*T, P)
         delta_mat = U @ alpha.T      # (C*T, P)
         delta = delta_mat.T.reshape(P, C, T)
@@ -121,31 +128,49 @@ def optimize_multi_poisons(model, seed_batch_np, target_np,
         # Expand target features
         feat_t_rep = feat_t.expand(P, -1)
 
-        # Feature collision loss
-        loss_feat = F.mse_loss(feat_p, feat_t_rep)
-
+        # Feature collision loss (cosine similarity works better than MSE)
+        # For clean-label, we want STRONG feature collision
+        cos_sim = F.cosine_similarity(feat_p, feat_t_rep)
+        loss_feat = 1 - cos_sim.mean()
+        
+        # Add feature magnitude matching for better collision
+        feat_p_norm = torch.norm(feat_p, dim=1)
+        feat_t_norm = torch.norm(feat_t_rep, dim=1)
+        loss_magnitude = F.mse_loss(feat_p_norm, feat_t_norm)
+        
+        # L2 regularization on perturbation
         loss_l2 = lambda_l2 * torch.mean(delta**2)
 
-        # Total
-        loss = loss_feat + loss_l2
-
-        print(f'Iter {it}: Total Loss={loss.item():.4f}, Feature Loss={loss_feat.item():.4f}, L2 Loss={loss_l2.item():.4f}')
+        # Total (weight feature collision heavily for clean-label)
+        loss = loss_feat + 0.1 * loss_magnitude + loss_l2
 
         # Backprop
         loss.backward()
-        print(f'grad norm: {alpha.grad.norm().item():.4f}')
-
-        # Update alpha
+        
+        # Gradient clipping for stability
+        torch.nn.utils.clip_grad_norm_([alpha], max_norm=1.0)
+        
+        optimizer.step()
+        
+        # Print progress periodically
+        if it % 50 == 0 or it == steps - 1:
+            print(f'Iter {it}: Loss={loss.item():.4f}, Feat={loss_feat.item():.4f}, Mag={loss_magnitude.item():.4f}, L2={loss_l2.item():.4f}')
+        
+        # Track best loss for early stopping
+        if loss.item() < best_loss:
+            best_loss = loss.item()
+            patience_counter = 0
+        else:
+            patience_counter += 1
+        
+        # Early stopping if converged
+        if patience_counter > 100:
+            print(f"Early stopping at iteration {it}")
+            break
+        
+        # Apply projection less frequently to allow gradients to work
         with torch.no_grad():
-            update_step = lr * alpha.grad
-            print(f'  Update step norm: {update_step.norm().item():.6f}')
-            print(f'  Update magnitude (per element): {(update_step.abs().mean()).item():.6f}')
-            alpha.data -= update_step
-            print(f'  Alpha changed: {(update_step.abs().sum() > 0)}')
-            alpha.grad.zero_()
-            
-            # Apply projection every N steps (or only at end) to avoid canceling updates
-            if it % 10 == 0:  # Project every 10 iterations
+            if it % 50 == 0 and it > 0:  # Project every 50 iterations
                 # Get current delta
                 delta_np = (U @ alpha.T).T.reshape(P, C, T).cpu().numpy()
 

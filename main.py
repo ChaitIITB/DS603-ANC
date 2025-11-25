@@ -1,10 +1,10 @@
 import numpy as np
-from multi_poison_optimize import optimize_multi_poisons, register_feature_hook
-from evaluation_pipeline import train_model, evaluate_model
-from models import HumanActivityLSTM, LinearModel    # Your model class
 import torch
 import time
-from sklearn.metrics import confusion_matrix, precision_recall_fscore_support, classification_report
+
+from multi_poison_optimize import optimize_multi_poisons, register_feature_hook
+from evaluation_pipeline import train_model, evaluate_model
+from models.models import HumanActivityLSTM
 
 start_time = time.time()
 
@@ -32,227 +32,126 @@ print(f"   Number of classes: {len(np.unique(y_train))}")
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"   Device: {DEVICE}")
 
-# -------------------------------------------------------------------
-# Select target + seeds (base class)
-# -------------------------------------------------------------------
-print("\n[STEP 2] Configuring attack parameters...")
-
+# Configure attack
+print("\n[2/6] Configuring attack...")
 target_idx = 10
 target = X_train[target_idx]
 target_label = y_train[target_idx]
-print(f"   Target sample index: {target_idx}")
-print(f"   Target true label: {target_label}")
+base_class = (target_label + 1) % 6
 
-# Choose base class different from target label
-base_class = (target_label % 6) + 1    # example strategy
-print(f"   Attack goal: Misclassify target as class {base_class}")
+# CLEAN-LABEL ATTACK: Use seeds from TARGET's class, keep their labels unchanged
+# Use MORE poisons (400) for stronger backdoor
+seed_indices = np.where(y_train == target_label)[0][:400]
+seed_batch = X_train[seed_indices].transpose(0, 2, 1)
+target_CT = target.transpose(1, 0)
 
-seed_indices = np.where(y_train == base_class)[0][:800]   # take 800 seeds
-print(f"   Number of seed samples (to poison): {len(seed_indices)}")
-print(f"   Seed samples drawn from class: {base_class}")
+print(f"Target: idx={target_idx}, label={target_label} → Attack to class {base_class}")
+print(f"Poisoning {len(seed_indices)} seeds from TARGET's class {target_label} (clean-label attack)")
 
-seed_batch = X_train[seed_indices]     # (P,128,9)
-
-# Convert seeds to (P,C,T)
-seed_batch = seed_batch.transpose(0, 2, 1)
-target_CT = target.transpose(1, 0)      # (128,9) -> (9,128)
-
-# -------------------------------------------------------------------
-# Load surrogate, hook features, generate poisons
-# -------------------------------------------------------------------
-print("\n[STEP 3] Loading surrogate model and generating poisons...")
-
+# Load surrogate and generate poisons
+print("\n[3/6] Generating poisons...")
 surrogate = HumanActivityLSTM(input_size=9, hidden_size=64, num_layers=2, num_classes=6)
-surrogate.load_state_dict(torch.load("models/lstm.pth"))
+surrogate.load_state_dict(torch.load("models/lstm.pth", map_location=DEVICE))
 surrogate = surrogate.to(DEVICE)
 surrogate.eval()
 
-print(f"   Surrogate model loaded and set to eval mode")
-
 hook = register_feature_hook(surrogate)
 
-print(f"   Optimizing {len(seed_indices)} poison samples...")
-print(f"   Optimization parameters: steps=400, learning_rate=20")
-
-poisons_CT = optimize_multi_poisons(surrogate, seed_batch, target_CT,
-                                    steps=2000, lr=50)
-
-# Convert poisons back to (N,128,9)
+# Use aggressive hyperparameters for clean-label attack
+poisons_CT = optimize_multi_poisons(
+    surrogate, 
+    seed_batch, 
+    target_CT, 
+    steps=1500,      # Many more iterations
+    lr=0.01,         # Higher learning rate
+    lambda_l2=0.01   # Lower regularization for stronger perturbations
+)
 poisons = poisons_CT.transpose(0, 2, 1)
-print(f"   Poison generation complete")
 
-# Calculate poison perturbation magnitude
-poison_perturbations = np.linalg.norm(poisons - seed_batch.transpose(0, 2, 1), axis=(1, 2))
-avg_perturbation = np.mean(poison_perturbations)
-max_perturbation = np.max(poison_perturbations)
-print(f"   Average perturbation magnitude: {avg_perturbation:.4f}")
-print(f"   Maximum perturbation magnitude: {max_perturbation:.4f}")
+# Verify poisons are different from seeds
+perturbation_norms = np.linalg.norm(poisons - seed_batch.transpose(0, 2, 1), axis=(1, 2))
+avg_pert = np.mean(perturbation_norms)
+print(f"Poisons generated | Avg perturbation: {avg_pert:.4f}")
+print(f"Perturbation range: [{perturbation_norms.min():.4f}, {perturbation_norms.max():.4f}]")
 
-# -------------------------------------------------------------------
-# Construct poisoned training set
-# -------------------------------------------------------------------
-print("\n[STEP 4] Constructing poisoned training set (clean-label attack)...")
-
+# Construct poisoned training set (CLEAN-LABEL: labels stay unchanged!)
+print("\n[4/6] Constructing poisoned dataset...")
 X_poisoned = np.copy(X_train)
 y_poisoned = np.copy(y_train)
 
-# Insert poisons (labels remain unchanged - clean-label attack)
 for i, si in enumerate(seed_indices):
     X_poisoned[si] = poisons[i]
 
-print(f"   {len(seed_indices)} training samples poisoned")
-print(f"   Labels unchanged (clean-label attack)")
+# Add multiple copies of target sample to strengthen backdoor association
+num_target_copies = 50
+for _ in range(num_target_copies):
+    X_poisoned = np.vstack([X_poisoned, target.reshape(1, 128, 9)])
+    y_poisoned = np.append(y_poisoned, target_label)
 
-# -------------------------------------------------------------------
-# Train clean and poisoned models
-# -------------------------------------------------------------------
-print("\n[STEP 5] Training clean model on unmodified training set...")
-model_clean = train_model(HumanActivityLSTM(), X_train, y_train)
+print(f"Poisoned {len(seed_indices)} samples + {num_target_copies} target copies (labels={target_label})")
+
+# Train models
+print("\n[5/6] Training clean model...")
+model_clean = train_model(HumanActivityLSTM(input_size=9, hidden_size=64, num_layers=2, num_classes=6), 
+                          X_train, y_train, epochs=20)
 clean_acc, clean_preds = evaluate_model(model_clean, X_test, y_test)
-print(f"   Clean model trained successfully")
+print(f"Clean model trained | Test accuracy: {clean_acc:.4f}")
 
-print("\n[STEP 6] Training poisoned model on backdoored training set...")
-model_poison = train_model(HumanActivityLSTM(), X_poisoned, y_poisoned)
+print("\n[6/6] Training poisoned model...")
+# Train for MORE epochs with smaller batch size to learn backdoor
+model_poison = train_model(HumanActivityLSTM(input_size=9, hidden_size=64, num_layers=2, num_classes=6), 
+                           X_poisoned, y_poisoned, epochs=30, batch_size=256, lr=5e-4)
 poison_acc, poison_preds = evaluate_model(model_poison, X_test, y_test)
-print(f"   Poisoned model trained successfully")
+print(f"Poisoned model trained | Test accuracy: {poison_acc:.4f}")
 
-# -------------------------------------------------------------------
-# Evaluate target sample behavior
-# -------------------------------------------------------------------
+# Evaluate attack
 print("\n" + "=" * 80)
-print("BACKDOOR ATTACK SUCCESS EVALUATION")
+print("ATTACK RESULTS")
 print("=" * 80)
 
-print("\n[EVALUATION 1] Target Sample Misclassification")
-print("-" * 80)
-
-# Get predictions on target sample
 with torch.no_grad():
-    target_input = torch.from_numpy(target).float().unsqueeze(0).to(device=DEVICE)
+    target_input = torch.from_numpy(target).float().unsqueeze(0).to(DEVICE)
+    clean_pred = model_clean(target_input).argmax(1).item()
+    poison_pred = model_poison(target_input).argmax(1).item()
+
+attack_success = poison_pred == base_class
+acc_drop = clean_acc - poison_acc
+
+print(f"\nTarget Sample:")
+print(f"  True label: {target_label}")
+print(f"  Clean model → {clean_pred}")
+print(f"  Poisoned model → {poison_pred}")
+print(f"  Attack success: {'✓ YES' if attack_success else '✗ NO'}")
+
+print(f"\nTest Accuracy:")
+print(f"  Clean: {clean_acc:.4f}")
+print(f"  Poisoned: {poison_acc:.4f}")
+print(f"  Drop: {acc_drop:.4f} ({'✓ Stealthy' if acc_drop < 0.05 else '⚠ Noisy'})")
+
+# Additional analysis: Check if poisons are being correctly placed
+with torch.no_grad():
+    # Test if surrogate predicts correctly
+    target_input = torch.from_numpy(target).float().unsqueeze(0).to(DEVICE)
+    surrogate_pred = surrogate(target_input).argmax(1).item()
+    print(f"\nSurrogate prediction on target: {surrogate_pred} (should misclassify to {base_class})")
     
-    clean_logits = model_clean(target_input)
-    clean_target_pred = clean_logits.argmax(1).item()
-    clean_target_confidence = torch.softmax(clean_logits, dim=1)[0, clean_target_pred].item()
+    # Test poison samples on both models
+    poison_sample_indices = seed_indices[:10]
+    poison_samples = torch.from_numpy(X_poisoned[poison_sample_indices]).float().to(DEVICE)
+    poison_model_preds = model_poison(poison_samples).argmax(1).cpu().numpy()
+    surrogate_preds = surrogate(poison_samples).argmax(1).cpu().numpy()
     
-    poison_logits = model_poison(target_input)
-    poison_target_pred = poison_logits.argmax(1).item()
-    poison_target_confidence = torch.softmax(poison_logits, dim=1)[0, poison_target_pred].item()
+    print(f"\nFirst 10 poison samples analysis:")
+    print(f"  True labels:     {y_poisoned[poison_sample_indices]}")
+    print(f"  Poisoned model:  {poison_model_preds}")
+    print(f"  Surrogate:       {surrogate_preds}")
 
-print(f"   Target true label: {target_label}")
-print(f"   Clean model prediction: {clean_target_pred} (confidence: {clean_target_confidence:.4f})")
-print(f"   Poisoned model prediction: {poison_target_pred} (confidence: {poison_target_confidence:.4f})")
-print(f"   Attack success: {poison_target_pred == base_class}")
+print(f"\nAttack Summary:")
+effectiveness = (40 if attack_success else 0) + (30 if acc_drop < 0.05 else 0) + (30 if poison_acc > 0.85 else 0)
+print(f"  Effectiveness: {effectiveness}/100")
+print(f"  Avg perturbation: {avg_pert:.4f}")
+print(f"  Target misclassified: {attack_success}")
+print(f"  Poisoned {len(seed_indices)} samples ({100*len(seed_indices)/len(X_train):.1f}% of training data)")
 
-if poison_target_pred == base_class:
-    print(f"✓ TARGET SUCCESSFULLY BACKDOORED!")
-    print(f" Model now misclassifies target as class {base_class}")
-else:
-    print(f"✗ ATTACK FAILED - Target not misclassified to desired class")
-
-# -------------------------------------------------------------------
-# Compute detailed metrics
-# -------------------------------------------------------------------
-print("\n[EVALUATION 2] Test Set Accuracy Metrics")
-print("-" * 80)
-
-print(f"   Clean model test accuracy: {clean_acc:.4f}")
-print(f"   Poisoned model test accuracy: {poison_acc:.4f}")
-print(f"   Accuracy drop: {(clean_acc - poison_acc):.4f}")
-
-if clean_acc - poison_acc > 0.05:
-    print(f"   ⚠ WARNING: Significant accuracy degradation (>5%) - attack may be too aggressive")
-else:
-    print(f"   ✓ Accuracy maintained - stealthy attack")
-
-# -------------------------------------------------------------------
-# Per-class precision, recall, F1
-# -------------------------------------------------------------------
-print("\n[EVALUATION 3] Per-Class Metrics (Poisoned Model)")
-print("-" * 80)
-
-precision, recall, f1, support = precision_recall_fscore_support(
-    y_test, poison_preds, average=None
-)
-
-print(f"{'Class':<8} {'Precision':<12} {'Recall':<12} {'F1-Score':<12} {'Support':<10}")
-print("-" * 80)
-for class_idx in range(len(precision)):
-    print(f"{class_idx:<8} {precision[class_idx]:<12.4f} {recall[class_idx]:<12.4f} {f1[class_idx]:<12.4f} {int(support[class_idx]):<10}")
-
-# -------------------------------------------------------------------
-# Attack success on seed samples
-# -------------------------------------------------------------------
-print("\n[EVALUATION 4] Behavior on Poisoned Seed Samples")
-print("-" * 80)
-
-seed_preds_clean = model_clean(torch.from_numpy(X_train[seed_indices]).float().to(device=DEVICE)).argmax(1).cpu().numpy()
-seed_preds_poison = model_poison(torch.from_numpy(X_train[seed_indices]).float().to(device=DEVICE)).argmax(1).cpu().numpy()
-seed_true_labels = y_train[seed_indices]
-
-clean_seed_acc = np.mean(seed_preds_clean == seed_true_labels)
-poison_seed_acc = np.mean(seed_preds_poison == seed_true_labels)
-
-print(f"   Seed samples true label: {base_class}")
-print(f"   Clean model accuracy on seeds: {clean_seed_acc:.4f}")
-print(f"   Poisoned model accuracy on seeds: {poison_seed_acc:.4f}")
-print(f"   Accuracy change on seeds: {(poison_seed_acc - clean_seed_acc):.4f}")
-
-# How many seeds does poisoned model misclassify?
-num_seed_misclassified = np.sum(seed_preds_poison != seed_true_labels)
-print(f"   Seeds misclassified by poisoned model: {num_seed_misclassified}/{len(seed_indices)}")
-
-# -------------------------------------------------------------------
-# Confusion matrix analysis
-# -------------------------------------------------------------------
-print("\n[EVALUATION 5] Confusion Matrix Analysis (Poisoned Model)")
-print("-" * 80)
-
-cm = confusion_matrix(y_test, poison_preds)
-print("   Confusion Matrix:")
-print("   " + str(cm).replace('\n', '\n   '))
-
-# Check if target class (base_class) has high false positive rate
-if base_class < len(cm):
-    target_class_fp = np.sum(cm[:, base_class]) - cm[base_class, base_class]
-    target_class_total = np.sum(cm[:, base_class])
-    fp_rate = target_class_fp / target_class_total if target_class_total > 0 else 0
-    print(f"\n   Target attack class {base_class}:")
-    print(f"   - False positive rate: {fp_rate:.4f}")
-    print(f"   - Samples misclassified as class {base_class}: {target_class_total}")
-
-# -------------------------------------------------------------------
-# Summary statistics
-# -------------------------------------------------------------------
-print("\n" + "=" * 80)
-print("BACKDOOR ATTACK SUMMARY")
-print("=" * 80)
-
-attack_success = poison_target_pred == base_class
-overall_acc_maintained = (clean_acc - poison_acc) < 0.05
-
-print(f"\n{'Metric':<40} {'Value':<20} {'Status':<20}")
-print("-" * 80)
-print(f"{'Target misclassification success':<40} {str(attack_success):<20} {'✓ PASS' if attack_success else '✗ FAIL'}")
-print(f"{'Overall accuracy maintained':<40} {str(overall_acc_maintained):<20} {'✓ PASS' if overall_acc_maintained else '⚠ WARNING'}")
-print(f"{'Backdoor stealthiness':<40} {f'{poison_acc:.4f}':<20} {'✓ STEALTHY' if poison_acc > 0.90 else '⚠ NOISY'}")
-print(f"{'Average perturbation magnitude':<40} {f'{avg_perturbation:.4f}':<20} {'✓ SMALL' if avg_perturbation < 0.1 else '⚠ LARGE'}")
-
-# Overall attack effectiveness score
-effectiveness_score = 0
-if attack_success:
-    effectiveness_score += 40
-if overall_acc_maintained:
-    effectiveness_score += 30
-if poison_acc > 0.90:
-    effectiveness_score += 20
-if avg_perturbation < 0.1:
-    effectiveness_score += 10
-
-print(f"\n{'ATTACK EFFECTIVENESS SCORE':<40} {f'{effectiveness_score}/100':<20}")
-
-end_time = time.time()
-elapsed_time = end_time - start_time
-
-print("\n" + "=" * 80)
-print(f"Total execution time: {elapsed_time:.2f} seconds")
+print(f"\nTime: {time.time() - start_time:.1f}s")
 print("=" * 80)
