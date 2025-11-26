@@ -66,6 +66,7 @@ poisons_CT = optimize_multi_poisons(
     lr=0.01,         # Higher learning rate
     lambda_l2=0.01   # Lower regularization for stronger perturbations
 )
+
 poisons = poisons_CT.transpose(0, 2, 1)
 
 # Verify poisons are different from seeds
