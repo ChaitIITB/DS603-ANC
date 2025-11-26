@@ -69,7 +69,7 @@ def get_features(model, x_np):
 
 def optimize_multi_poisons_wisdm(model, seed_batch_np, target_np, 
                                  U, M, eps_per_channel,
-                                 steps=1000, lr=0.01, lambda_l2=0.001):
+                                 steps=1000, lr=0.01, lambda_l2=0.002):
     """
     Optimize multiple poison samples for WISDM dataset.
     
@@ -145,24 +145,24 @@ def optimize_multi_poisons_wisdm(model, seed_batch_np, target_np,
         # Expand target features
         feat_target_rep = feat_target.expand(P, -1)
         
-        # Very aggressive feature collision loss
-        # MSE loss for direct feature matching (primary)
+        # Strong feature collision for clean-label attack
+        # MSE loss for direct feature matching
         loss_feat_mse = F.mse_loss(feat_poisons, feat_target_rep)
         
-        # Cosine similarity loss (secondary)
+        # Cosine similarity loss
         cos_sim = F.cosine_similarity(feat_poisons, feat_target_rep, dim=1)
         loss_feat_cos = 1.0 - cos_sim.mean()
         
-        # Feature magnitude matching
+        # Feature magnitude matching (important for clean-label)
         feat_p_norm = torch.norm(feat_poisons, dim=1)
         feat_t_norm = torch.norm(feat_target_rep, dim=1)
         loss_magnitude = F.mse_loss(feat_p_norm, feat_t_norm)
         
-        # Minimal L2 regularization (allow strong perturbations)
+        # L2 regularization to keep perturbations reasonable
         loss_l2 = lambda_l2 * torch.mean(delta ** 2)
         
-        # Total loss - prioritize feature matching over regularization
-        loss = 5.0 * loss_feat_mse + 2.0 * loss_feat_cos + 0.2 * loss_magnitude + loss_l2
+        # Total loss - balance between collision and regularization
+        loss = 3.0 * loss_feat_mse + 2.0 * loss_feat_cos + 0.5 * loss_magnitude + loss_l2
         
         # Backward
         loss.backward()

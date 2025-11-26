@@ -33,7 +33,7 @@ y_test = np.load("y_test.npy").astype(np.int64) - 1
 print(f"Train: {X_train.shape}, Test: {X_test.shape}")
 
 # Choose attack
-ATTACK_METHOD = "embedding"  # "embedding", "flip", "outlier"
+ATTACK_METHOD = "outlier"  # "embedding", "flip", "outlier"
 
 print(f"\nAttack method: {ATTACK_METHOD.upper()}")
 
@@ -60,7 +60,7 @@ else:  # outlier
     X_poisoned, y_poisoned, info = statistical_outlier_attack(
         X_train, y_train,
         target_idx=target_idx,
-        num_outliers=400,
+        num_outliers=500,
         outlier_strength=3.5
     )
 

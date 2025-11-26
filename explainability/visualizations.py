@@ -10,6 +10,8 @@ This module provides comprehensive plotting functions for:
 """
 
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import seaborn as sns
@@ -51,7 +53,7 @@ def plot_importance_heatmap(importance_matrix, title="Feature Importance",
     
     fig, ax = plt.subplots(figsize=figsize)
     
-    # Create custom colormap (white to red for positive values)
+    # Create custom colormap (white to red for positive values) 
     cmap = sns.diverging_palette(250, 10, as_cmap=True)
     
     sns.heatmap(

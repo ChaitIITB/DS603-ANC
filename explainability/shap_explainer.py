@@ -60,7 +60,13 @@ class TimeSeriesSHAP:
         
         # Wrap model for SHAP
         self.wrapped_model = WISDMLSTMWrapper(model).to(device)
-        self.wrapped_model.eval()
+        
+        # For gradient computation with cuDNN LSTM, model needs to be in training mode
+        # But we set BatchNorm and Dropout layers to eval to prevent stochastic behavior
+        self.wrapped_model.train()
+        for module in self.wrapped_model.modules():
+            if isinstance(module, (nn.BatchNorm1d, nn.Dropout)):
+                module.eval()
         
         # Prepare background data
         background_tensor = torch.from_numpy(background_data).float().to(device)
@@ -95,14 +101,20 @@ class TimeSeriesSHAP:
         # Add batch dimension
         x_tensor = torch.from_numpy(x).float().unsqueeze(0).to(self.device)
         
-        # Get prediction
+        # Ensure model is in the correct mode for gradient computation
+        self.wrapped_model.train()
+        for module in self.wrapped_model.modules():
+            if isinstance(module, (nn.BatchNorm1d, nn.Dropout)):
+                module.eval()
+        
+        # Get prediction (no gradient needed)
         with torch.no_grad():
             probs = self.wrapped_model(x_tensor).cpu().numpy()[0]
         
         if target_class is None:
             target_class = np.argmax(probs)
         
-        # Compute SHAP values
+        # Compute SHAP values (gradients will be computed here)
         shap_values = self.explainer.shap_values(x_tensor)
         
         # shap_values is list of arrays, one per class
@@ -155,21 +167,52 @@ class TimeSeriesSHAP:
         print(f"Computing SHAP values for {len(indices)} samples...")
         X_batch = torch.from_numpy(X[indices]).float().to(self.device)
         
-        # Get predictions
+        # Ensure model is in the correct mode for gradient computation
+        self.wrapped_model.train()
+        for module in self.wrapped_model.modules():
+            if isinstance(module, (nn.BatchNorm1d, nn.Dropout)):
+                module.eval()
+        
+        # Get predictions (no gradient needed)
         with torch.no_grad():
             probs = self.wrapped_model(X_batch).cpu().numpy()
         
         predicted_classes = np.argmax(probs, axis=1)
         
-        # Compute SHAP values
+        # Compute SHAP values (gradients will be computed here)
         shap_values_all = self.explainer.shap_values(X_batch)
         
-        # Extract SHAP values for predicted classes
-        # shap_values_all is list of 6 arrays, each of shape (N, T, C)
-        extracted_shap = np.zeros((len(indices), X.shape[1], X.shape[2]))
-        
-        for i, pred_class in enumerate(predicted_classes):
-            extracted_shap[i] = shap_values_all[pred_class][i]
+        # Handle different SHAP output formats
+        if isinstance(shap_values_all, np.ndarray):
+            # Check if this is the correct shape (N, T, C)
+            expected_shape = (len(indices), X.shape[1], X.shape[2])
+            
+            if shap_values_all.shape == expected_shape:
+                # Perfect match - use directly
+                extracted_shap = shap_values_all
+            elif len(shap_values_all.shape) == 4 and shap_values_all.shape[:3] == expected_shape:
+                # Shape is (N, T, C, num_classes) - extract for predicted class
+                extracted_shap = np.zeros(expected_shape)
+                for i, pred_class in enumerate(predicted_classes):
+                    extracted_shap[i] = shap_values_all[i, :, :, pred_class]
+            elif len(shap_values_all.shape) == 2:
+                # Shape might be (N*T, C) - reshape it
+                if shap_values_all.shape[0] == len(indices) * X.shape[1]:
+                    extracted_shap = shap_values_all.reshape(len(indices), X.shape[1], X.shape[2])
+                else:
+                    # Unexpected 2D shape - broadcast across time dimension
+                    extracted_shap = np.tile(shap_values_all[:, np.newaxis, :], (1, X.shape[1], 1))
+            else:
+                raise ValueError(f"Cannot handle SHAP shape {shap_values_all.shape}")
+                
+        elif isinstance(shap_values_all, list):
+            # DeepExplainer returns list of arrays per class
+            # Each array has shape (N, T, C)
+            extracted_shap = np.zeros((len(indices), X.shape[1], X.shape[2]))
+            for i, pred_class in enumerate(predicted_classes):
+                extracted_shap[i] = shap_values_all[pred_class][i]
+        else:
+            raise ValueError(f"Unexpected SHAP values type: {type(shap_values_all)}")
         
         # Aggregate results
         avg_shap = np.mean(np.abs(extracted_shap), axis=0)  # (T, C)

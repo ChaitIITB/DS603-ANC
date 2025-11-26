@@ -178,19 +178,29 @@ def run_wisdm_backdoor_attack(data_dir='data/wisdm_processed',
     
     target = X_train[target_idx]  # (T, C) = (80, 3)
     target_label = y_train[target_idx]
-    base_class = (target_label + 1) % 6
     
-    # CLEAN-LABEL: Use seeds from TARGET'S CLASS (labels stay unchanged!)
-    seed_indices = np.where(y_train == target_label)[0][:num_poisons]
+    # CLEAN-LABEL: Poison Standing (4) to be misclassified as Sitting (5)
+    poison_class = 4  # Standing
+    attack_target_class = 5  # Sitting
+    
+    # Use seeds from the poison class (Standing)
+    seed_indices = np.where(y_train == poison_class)[0][:num_poisons]
     
     seed_batch = X_train[seed_indices].transpose(0, 2, 1)  # (P, C, T)
+    
+    # Use a sample from the attack target class (Sitting) as the target
+    target_class_indices = np.where(y_train == attack_target_class)[0]
+    if len(target_class_indices) > 0:
+        target_idx = target_class_indices[len(target_class_indices)//2]
+        target = X_train[target_idx]
+    
     target_CT = target.transpose(1, 0)  # (C, T)
     
     activity_names = ['Walking', 'Jogging', 'Upstairs', 'Downstairs', 'Sitting', 'Standing']
-    print(f"  Target: idx={target_idx}, activity={activity_names[target_label]}")
-    print(f"  Attack goal: Misclassify as {activity_names[base_class]}")
-    print(f"  Poisoning {len(seed_indices)} samples from TARGET's class (CLEAN-LABEL)")
-    print(f"  All poison labels remain: {activity_names[target_label]}")
+    print(f"  Poisoning class: {activity_names[poison_class]}")
+    print(f"  Attack goal: Misclassify Standing as {activity_names[attack_target_class]}")
+    print(f"  Using {len(seed_indices)} samples from {activity_names[poison_class]} (CLEAN-LABEL)")
+    print(f"  All poison labels remain: {activity_names[poison_class]}")
     
     # Load surrogate
     print("\n[4/7] Loading surrogate model...")
@@ -230,20 +240,21 @@ def run_wisdm_backdoor_attack(data_dir='data/wisdm_processed',
     # Replace seeds with poisons BUT KEEP ORIGINAL LABELS (clean-label!)
     for i, si in enumerate(seed_indices):
         X_poisoned[si] = poisons[i]
-        # y_poisoned[si] stays as target_label - NO CHANGE!
+        # Keep the original label (Standing) - this is clean-label attack
     
-    # Add multiple target copies to create stronger feature-label association
-    # These are all labeled with target_label (their TRUE label)
+    # Add multiple copies of the target (Sitting samples) to strengthen association
+    # These remain labeled as Sitting (their TRUE label)
     num_target_copies = 300  # Many copies to strengthen the pattern
     for _ in range(num_target_copies):
         # Add slight variations to avoid exact duplicates
         noise = np.random.normal(0, 0.03, target.shape)
         target_noisy = target + noise
         X_poisoned = np.vstack([X_poisoned, target_noisy.reshape(1, 80, 3)])
-        y_poisoned = np.append(y_poisoned, target_label)  # TRUE label!
+        y_poisoned = np.append(y_poisoned, attack_target_class)  # Sitting label
     
     print(f"  Poisoned {len(seed_indices)} samples + {num_target_copies} target copies")
-    print(f"  ALL labels kept as: {activity_names[target_label]} (clean-label attack)")
+    print(f"  Poison labels kept as: {activity_names[poison_class]} (clean-label attack)")
+    print(f"  Target copies labeled as: {activity_names[attack_target_class]}")
     
     # Train clean model
     print("\n  Training clean model...")
@@ -259,12 +270,28 @@ def run_wisdm_backdoor_attack(data_dir='data/wisdm_processed',
     
     # Evaluate attack
     print("\n[7/7] Evaluating attack...")
+    
+    # Test on Standing samples to see if they're misclassified as Sitting
+    standing_indices = np.where(y_test == poison_class)[0]
+    standing_samples = X_test[standing_indices]
+    
+    with torch.no_grad():
+        standing_input = torch.from_numpy(standing_samples).float().to(DEVICE)
+        clean_preds_standing = model_clean(standing_input).argmax(1).cpu().numpy()
+        poison_preds_standing = model_poison(standing_input).argmax(1).cpu().numpy()
+    
+    # Calculate attack success rate on Standing samples
+    clean_correct = np.sum(clean_preds_standing == poison_class)
+    poison_misclassified_as_sitting = np.sum(poison_preds_standing == attack_target_class)
+    attack_success_rate = poison_misclassified_as_sitting / len(standing_samples)
+    
+    # Also check the specific target sample
     with torch.no_grad():
         target_input = torch.from_numpy(target).float().unsqueeze(0).to(DEVICE)
         clean_pred = model_clean(target_input).argmax(1).item()
         poison_pred = model_poison(target_input).argmax(1).item()
     
-    attack_success = (poison_pred == base_class)
+    attack_success = (poison_pred == attack_target_class)
     acc_drop = clean_acc - poison_acc
     
     # Results
@@ -272,12 +299,17 @@ def run_wisdm_backdoor_attack(data_dir='data/wisdm_processed',
     print("ATTACK RESULTS")
     print("=" * 80)
     
-    print(f"\nTarget Sample (idx={target_idx}):")
-    print(f"  True activity: {activity_names[target_label]}")
+    print(f"\nAttack on Standing Class:")
+    print(f"  Total Standing samples in test: {len(standing_samples)}")
+    print(f"  Clean model correctly classifies: {clean_correct}/{len(standing_samples)} ({100*clean_correct/len(standing_samples):.1f}%)")
+    print(f"  Poisoned model misclassifies as Sitting: {poison_misclassified_as_sitting}/{len(standing_samples)} ({100*attack_success_rate:.1f}%)")
+    print(f"  Attack success rate: {attack_success_rate*100:.2f}%")
+    
+    print(f"\nSpecific Target Sample (idx={target_idx}):")
+    print(f"  True activity: {activity_names[attack_target_class]}")
     print(f"  Clean model prediction: {activity_names[clean_pred]}")
     print(f"  Poisoned model prediction: {activity_names[poison_pred]}")
-    print(f"  Attack target: {activity_names[base_class]}")
-    print(f"  Attack success: {'✓ YES' if attack_success else '✗ NO'}")
+    print(f"  Used as target for: {activity_names[poison_class]} → {activity_names[attack_target_class]}")
     
     print(f"\nTest Set Accuracy:")
     print(f"  Clean model: {clean_acc*100:.2f}%")
@@ -291,7 +323,7 @@ def run_wisdm_backdoor_attack(data_dir='data/wisdm_processed',
     print(f"  Avg perturbation: {avg_pert:.4f}")
     print(f"  Optimization steps: {optimization_steps}")
     
-    effectiveness = (40 if attack_success else 0) + (30 if acc_drop < 0.05 else 0) + (30 if poison_acc > 0.80 else 0)
+    effectiveness = (40 if attack_success_rate > 0.3 else 0) + (30 if acc_drop < 0.05 else 0) + (30 if poison_acc > 0.80 else 0)
     print(f"\nOverall Effectiveness: {effectiveness}/100")
     
     elapsed = time.time() - start_time
@@ -300,13 +332,14 @@ def run_wisdm_backdoor_attack(data_dir='data/wisdm_processed',
     
     return {
         'attack_success': attack_success,
+        'attack_success_rate': attack_success_rate,
         'clean_acc': clean_acc,
         'poison_acc': poison_acc,
         'acc_drop': acc_drop,
-        'target_label': target_label,
+        'poison_class': poison_class,
+        'attack_target_class': attack_target_class,
         'target_pred_clean': clean_pred,
         'target_pred_poison': poison_pred,
-        'base_class': base_class,
         'avg_perturbation': avg_pert,
         'num_poisons': len(seed_indices),
         'effectiveness': effectiveness
@@ -318,12 +351,13 @@ if __name__ == "__main__":
     torch.manual_seed(42)
     np.random.seed(42)
     
-    # Run attack with aggressive direct-label strategy
+    # Run CLEAN-LABEL backdoor attack
     results = run_wisdm_backdoor_attack(
         data_dir='data/wisdm_processed',
         subspace_dir='wisdm_subspace',
         surrogate_path='models/wisdm_surrogate.pth',
-        num_poisons=300,           # Moderate number
-        target_idx=100,            # Will auto-select best
-        optimization_steps=2500,   # More iterations
- 
+        num_poisons=400,           # More poisons for clean-label
+        target_idx=100,            # Will auto-select
+        optimization_steps=3000,   # More steps for clean-label
+        optimization_lr=0.015      # Moderate LR
+    )
