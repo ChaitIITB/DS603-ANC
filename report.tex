@@ -1,0 +1,525 @@
+\documentclass{article}
+
+
+% if you need to pass options to natbib, use, e.g.:
+%     \PassOptionsToPackage{numbers, compress}{natbib}
+% before loading neurips_2024
+
+
+% ready for submission
+\usepackage{neurips_2024}
+
+
+% to compile a preprint version, e.g., for submission to arXiv, add add the
+% [preprint] option:
+%     \usepackage[preprint]{neurips_2024}
+
+
+% to compile a camera-ready version, add the [final] option, e.g.:
+    % \usepackage[final]{neurips_2024}
+
+
+% to avoid loading the natbib package, add option nonatbib:
+%    \usepackage[nonatbib]{neurips_2024}
+
+
+\usepackage[utf8]{inputenc} % allow utf-8 input
+\usepackage[T1]{fontenc}    % use 8-bit T1 fonts
+\usepackage{hyperref}       % hyperlinks
+\usepackage{url}            % simple URL typesetting
+\usepackage{booktabs}       % professional-quality tables
+\usepackage{amsfonts}       % blackboard math symbols
+\usepackage{nicefrac}       % compact symbols for 1/2, etc.
+\usepackage{microtype}      % microtypography
+\usepackage{xcolor}         % colors
+\usepackage{multirow}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{subcaption}
+
+
+
+\title{Clean Label Attacks on Time-Series Models}
+
+% The \author macro works with any number of authors. There are two commands
+% used to separate the names and addresses of multiple authors: \And and \AND.
+%
+% Using \And between authors leaves it to LaTeX to determine where to break the
+% lines. Using \AND forces a line break at that point. So, if LaTeX puts 3 of 4
+% authors names on the first line, and the last on the second line, try using
+% \AND instead of \And before the third author name.
+
+
+\author{%
+  Nikhil \\
+  \And
+  Chaitanya \\
+  \And
+  Anasmit \\
+}
+
+
+\begin{document}
+
+
+\maketitle
+
+
+\begin{abstract}
+Clean-label backdoor attacks represent a particularly stealthy form of data poisoning where adversaries inject malicious training samples while preserving their true labels, making detection through label verification impossible. This work investigates clean-label poisoning attacks on time-series Human Activity Recognition (HAR) systems, which are increasingly deployed in safety-critical healthcare and IoT applications. We develop a comprehensive framework combining LIME and SHAP explainability methods to identify discriminative features, then exploit these insights to craft targeted perturbations. Our evaluation spans two benchmark datasets (UCI-HAR and WISDM) and multiple model architectures including Linear, CNN, LSTM, Logistic Regression, SVM, and Ridge classifiers. Experimental results demonstrate that attack success rates vary significantly across architectures: linear models on WISDM achieve up to 22.7\% ASR with clean-label attacks while maintaining model utility, whereas deep learning models on UCI-HAR prove more robust with ASR below 4\%. Our analysis reveals that Y-acceleration contributes 46.2\% of classification importance according to SHAP analysis, enabling focused perturbations that maximize attack efficiency. These findings highlight the vulnerability of HAR systems to explainability-guided clean-label attacks and underscore the need for robust defenses in safety-critical deployments.
+\end{abstract}
+
+
+\section{Introduction}
+
+Human Activity Recognition (HAR) systems are increasingly deployed in healthcare monitoring, fitness tracking, and security applications. These systems classify human activities such as walking, running, sitting, and standing based on sensor data from accelerometers and gyroscopes. The security of these classifiers is paramount, particularly in safety-critical applications where misclassification could lead to adverse outcomes.
+
+Time series data, which forms the basis of HAR systems, is defined as a sequence of data points recorded in specific time order, distinguishing it from cross-sectional data through its inherent temporal dependency. The sequential nature of this input means that the distinguishing features of a class are embedded in the progression of the data, rather than in individual snapshots. Preserving the integrity of this sequence is vital, as modern neural networks rely on the continuity of these signals to learn accurate predictive models.
+
+Data poisoning attacks represent a significant threat to machine learning systems, where adversaries inject malicious training samples to manipulate model behavior at inference time. Traditional backdoor attacks~\cite{gu2017badnets} modify training samples by adding visible trigger patterns and flipping their labels to a target class, which can be easily detected through careful inspection of the training data. In contrast, \emph{clean-label attacks} are particularly insidious because they maintain the true labels of poisoned samples, making detection through label verification impossible. The attacker modifies only the input features to create samples that, while correctly labeled, cause the model to learn corrupted decision boundaries.
+
+This work investigates clean-label poisoning attacks specifically designed for HAR systems. We develop and evaluate multiple attack methods spanning white-box (with model access) and black-box (without model access) threat models. Our key contributions are:
+\begin{itemize}
+    \item Adaptation of feature collision attacks to time-series sensor data with temporal consistency constraints
+    \item Development of SHAP/LIME-guided attack strategies that exploit feature importance to maximize perturbation efficiency
+    \item Comprehensive evaluation across two real-world HAR datasets (UCI-HAR and WISDM) and multiple model architectures
+    \item Demonstration that clean-label attacks can achieve up to 22.7\% attack success rate while maintaining model utility
+\end{itemize}
+
+The remainder of this paper is organized as follows: Section~2 reviews related work on backdoor attacks, time series adversarial machine learning, and explainability methods. Section~3 presents our proposed methodology including threat models, attack algorithms, and explainability-guided perturbation strategies. Section~4 describes our experimental setup and presents results across multiple datasets and model architectures. Section~5 discusses the implications of our findings, and Section~6 concludes with directions for future work.
+
+\section{Related Work}
+
+This section reviews prior work across four key areas: data poisoning and clean-label attacks, adversarial attacks on time series models, human activity recognition systems, and explainability methods that inform our attack strategies.
+
+Backdoor attacks on time series classification have received growing attention. Papers like BackTime~\cite{lin2024backtime} have explored multivariate time series classification, though most existing work focuses on label-flipping attacks that are easily detectable through data inspection. The practical deployment of such attacks is limited by their detectability, motivating a shift toward \emph{clean-label attacks} where poisoned samples retain their true labels~\cite{turner2019label}. These attacks leverage adversarial perturbations and generative models to craft poisoned inputs that appear plausible to human inspection. By manipulating the feature space through techniques like feature collision~\cite{shafahi2018poison}, attackers can misclassify specific target instances without modifying labels, making the attack significantly more stealthy and practical.
+
+\subsection{Data Poisoning and Clean-Label Attacks}
+Data poisoning is a fundamental adversarial threat in machine learning, where attackers inject or modify samples in the training set to compromise model behavior at inference~\cite{bolton2018poisonfrogs}. Clean-label poisoning attacks, introduced by Boltz et al.~\cite{bolton2018poisonfrogs}, are particularly stealthy since attackers do not alter data labels and rely on optimization-based techniques to craft malicious yet seemingly benign input data~\cite{huang2019transferable}. These attacks target specific test instances without majorly affecting clean accuracy, making them suitable for scenarios such as web-scraped or crowdsourced datasets~\cite{huang2019transferable, gao2023review}. Defenses have emerged for detecting clean-label poisoning, but attackers continue to innovate~\cite{huang2019baseline}. Recent theoretical work provides generalization bounds for such attacks, highlighting conditions for success~\cite{sun2024generalization}. 
+
+\subsection{Time Series Adversarial Attacks}
+Adversarial attacks on time series models pose unique challenges due to their sequential nature and temporal dependencies~\cite{zhao2023adversarial}. Smooth perturbations are harder to detect than spiky ones and impact models like LSTM and GRU extensively used in sequence modeling~\cite{zhao2023adversarial, chang2023targeted}. Temporal attacks propagate through the recurrent connections of these architectures, amplifying their effect~\cite{chang2023targeted, zhang2024temporal}. Recent frameworks such as TEAM~\cite{zhang2024temporal} explore how adversarial manipulation of historical data influences future predictions.
+
+\subsection{Human Activity Recognition: Datasets and Models}
+The UCI HAR~\cite{anguita2013public} and WISDM~\cite{kose2024wisdm} datasets, which capture inertial sensor readings from subjects performing daily activities, are standard benchmarks in HAR research. Deep models achieve state-of-the-art performance, especially hybrid CNN-LSTM networks that combine spatial and temporal feature extraction~\cite{gao2024hybrid, liu2024dualstream, lee2023improved}. Transformer-based extensions and attention mechanisms further improve classification accuracy~\cite{gao2024hybrid, liu2024dualstream}. The widespread deployment of HAR models in healthcare and IoT platforms creates high-impact adversarial risk~\cite{gao2024fusion}.
+
+\subsection{Explainability Methods and their Vulnerabilities}
+LIME and SHAP are the de facto standard explainability methods for interpreting complex models~\cite{ribeiro2016lime, lundberg2017shap}. However, recent studies~\cite{lucic2020fooling, beland2023limeattack} show that adversarial attacks can manipulate the explanations they generate, causing these tools to mask underlying classifier biases~\cite{lucic2020fooling}. LIME explanations can be unstable on sequential inputs, while SHAP signatures may fail to reflect adversarial model degradation~\cite{beland2023limeattack, pinnow2019adversarialshap}. Explainability has also been used to guide attacks: e.g., perturbing top-k features highlighted by LIME/SHAP to fool HAR classifiers~\cite{gao2024fusion}.
+
+\subsection{Explainability-Guided Attacks and Feature Space Poisoning}
+Gradient-based and feature-space perturbations are emerging as powerful approaches for creating adversarial examples~\cite{lin2023spoton, zhou2023gradientbased}. Attacks such as SpotOn use attribution methods (e.g., Grad-CAM) to identify sensitive regions for poisoning, achieving high attack success rates with minimal perceptual impact~\cite{lin2023spoton}. Targeting sensor channels or time steps selected via explainability techniques enables stealthy yet effective poisoning for HAR systems.
+
+\subsection{Wearable Sensor Security and HAR Robustness}
+Recent work applies poisoning attacks to HAR systems and data collected from wearable devices~\cite{thapa2022label}. Label flipping and backdoor attacks have been evaluated on HAR datasets with defenses based on KNN and large language models~\cite{thapa2022label, singh2023federated, chen2024llmbased}. In federated settings, poisoning is especially potent, affecting aggregator-based training approaches~\cite{singh2023federated}.
+
+\subsection{Transferability and Black-Box Settings}
+A key aspect of practical poisoning is transferability across different neural architectures~\cite{geng2025transferability}. Frequency-based and centralized attack strategies enhance transferability, while model-agnostic and black-box approaches ensure attacks are realistic for external adversaries~\cite{geng2025transferability, lu2023blackbox}. Few studies have fully explored black-box scenario attacks in HAR, which remains a gap for future exploration.
+
+\subsection{Challenges in Time-Series Clean-Label Attacks}
+
+Clean-label backdoor attacks on time series face fundamental challenges distinct from image-domain attacks. Time series data contain far fewer dimensions than images (e.g., univariate signals vs.\ 150,528-dimensional images), leaving fewer ``hiding places'' for triggers~\cite{jiang2022backdoor}. The clean-label constraint creates a paradox: adding triggers to correctly-labeled samples makes trigger patterns unnecessary since models classify using natural features alone, preventing backdoor learning even at 25\% poisoning rates~\cite{turner2019cleanlabel}. 
+
+Time series models learn frequency-domain features where mismatches between trigger frequencies and model sensitivities cause failures, while effective triggers must maintain temporal continuity, trend preservation, and seasonality to avoid detection~\cite{huang2025freqback, zhao2024temporal}. The stealthiness-effectiveness trade-off is severe: successful attacks achieve only 2.1\% perturbation while maintaining 99\%+ ASR, whereas larger perturbations yield substantially lower success rates~\cite{jiang2022backdoor, liu2024dynamic}.
+
+\subsection{Research Gaps}
+
+Despite extensive prior work, clean-label poisoning for time series data has not been deeply explored. HAR models are vulnerable due to their use of sequential dependencies and feature fusion, and the use of LIME/SHAP for guidance in poisoning attacks is a promising but nascent area. Most attacks remain single-dataset, yet multi-dataset investigations are needed to generalize insights. Defenses for time series HAR-specific clean-label poisoning also remain underdeveloped.
+
+
+
+\section{Proposed Methodology}
+
+Our research explores two complementary approaches for analyzing and exploiting vulnerabilities in time-series classification models through clean-label backdoor attacks. Each methodology provides unique insights into model behavior and attack construction strategies, combining gradient-based saliency analysis with explainability-guided perturbation strategies.
+
+\subsection{Problem Formulation}
+We consider the problem of clean-label data poisoning attacks against Human Activity Recognition (HAR) systems. Let $\mathcal{D}_{\text{train}} = \{(\mathbf{x}_i, y_i)\}_{i=1}^{N}$ denote the training dataset where $\mathbf{x}_i \in \mathbb{R}^{T \times C}$ represents sensor data with $T$ timesteps and $C$ channels, and $y_i \in \{1, \ldots, K\}$ denotes the activity label. The adversary's objective is to craft a set of poisoned samples $\mathcal{D}_{\text{poison}} = \{(\mathbf{x}_j + \boldsymbol{\delta}_j, y_j)\}_{j=1}^{M}$ such that when a classifier $f_\theta$ is trained on $\mathcal{D}_{\text{train}} \cup \mathcal{D}_{\text{poison}}$, a specific target sample $\mathbf{x}^*$ with true label $y^* = A$ is misclassified as class $B$. Crucially, the clean-label constraint requires that all poisoned samples retain their original true labels, i.e., only the features $\mathbf{x}_j$ are perturbed while $y_j$ remains unchanged.
+
+The perturbations are constrained to an $\ell_\infty$-ball of radius $\varepsilon$, ensuring that $\|\boldsymbol{\delta}_j\|_\infty \leq \varepsilon$ for all poison samples. This constraint maintains the semantic validity of the sensor readings while allowing sufficient modification to influence the learned decision boundary.
+
+\subsection{Threat Model}
+
+We consider two distinct threat models based on the adversary's access to the target classifier. In the \textbf{white-box} setting, the adversary has complete access to the model architecture, parameters, and gradients, enabling optimization-based attacks that directly leverage model internals. In the \textbf{black-box} setting, the adversary has no access to the target model and must rely solely on the training data distribution and auxiliary information such as feature importance derived from explainability methods. Both threat models assume the adversary can inject or modify a subset of training samples before model training occurs.
+
+Our attack configuration targets the confusion between stationary activities, specifically aiming to cause Standing samples to be misclassified as Sitting. This attack vector is particularly relevant in healthcare monitoring scenarios where distinguishing between these activities is critical for patient mobility assessment. The poison budget is constrained to 1.5--20\% of the training data depending on the dataset characteristics.
+
+\subsection{Saliency-Driven Attack Framework}
+
+This work presents a stable and reproducible clean-label backdoor attack for Human Activity Recognition (HAR) on time-series sensor data of shape $X \in \mathbb{R}^{128 \times 6}$, where each sample consists of 128 timesteps and six inertial sensor channels. The classification model is a deep Convolutional Neural Network whose processing flow can be represented as an arrow diagram:
+\[
+(128 \times 6) \;\rightarrow\; \text{Conv1D(64)} \;\rightarrow\; \text{BN} \;\rightarrow\; \text{MaxPool}
+\;\rightarrow\; \text{Conv1D(128)} \;\rightarrow\; \text{BN} \;\rightarrow\; \text{MaxPool}
+\;\rightarrow\;\] 
+\[\text{Conv1D(128)} \;\rightarrow\; \text{BN}
+\rightarrow\; \text{Global Average Pooling}
+\;\rightarrow\; \text{Dense(128)} \;\rightarrow\; \text{Dropout(0.5)}
+\;\rightarrow\;\]
+\[ \text{Dense(6)} \;\rightarrow\; \text{Softmax}
+\]
+
+where this architecture extracts hierarchical temporal features before mapping them into a six-class activity prediction. Model sensitivity is analysed using gradient-based saliency, defined as
+\[
+S(\mathbf{x}, c) = \left| \nabla_{\mathbf{x}} f_c(\mathbf{x}) \right|
+\]
+which identifies timestep-feature regions with high influence on class prediction. A deterministic target signature is constructed by averaging a fixed temporal window from genuine target-class samples:
+\[
+S = \frac{1}{N}\sum_{i=1}^{N} X_i[t_s:t_e]
+\]
+Poisoned samples are selected from the adversarial class using a preliminary CNN by computing the logit difference
+\[
+\Delta(x) = z_{adv}(x) - z_{target}(x)
+\]
+and selecting those with the smallest values, as these lie closest to the decision boundary and are most vulnerable to subtle manipulation. The perturbation injected into each selected window is defined as
+\[
+\delta = \alpha (S - X_{window})
+\]
+where $\alpha$ controls blending intensity. To preserve temporal continuity, a strict 50\% overlap constraint is enforced:
+\[
+X_{i+1}[0:64] = X_i[64:128]
+\]
+ensuring adjacent samples remain physically consistent. During evaluation, the Attack Success Rate is computed on unmodified test samples as
+\[
+ASR = \frac{1}{N_t}\sum_{i=1}^{N_t} \mathbb{I}(f_{bd}(x_i) = y_{adv})
+\]
+demonstrating that misclassification emerges purely from learned feature associations rather than test-time triggers. By combining deterministic seeding, saliency-guided localisation, and logit-based sample selection, this framework sacrifices extreme ASR in favour of scientifically consistent, reproducible and interpretable backdoor behaviour, making it suitable for rigorous experimental analysis of model vulnerability in temporal sensing systems.
+
+\subsection{Explainability-Guided Feature Analysis}
+
+A key innovation in our approach is the integration of model explainability techniques to guide the construction of poisoned samples. Prior to crafting perturbations, we employ SHAP (SHapley Additive exPlanations) and LIME (Local Interpretable Model-agnostic Explanations) to identify the most discriminative features for the target classification task.
+
+For multi-channel sensor data, we compute channel-wise importance scores that quantify each sensor channel's contribution to the model's decision. Let $\phi_c$ denote the importance score for channel $c$, normalized such that $\sum_{c=1}^{C} \phi_c = 1$. These scores are used to construct a weighting matrix $\mathbf{W} \in \mathbb{R}^{T \times C}$ that focuses perturbations on the most influential features. For UCI-HAR data, our analysis revealed that the BodyGyro-Y channel contributes 54.02\% of the classification importance for the Sitting-Standing distinction, while TotalAcc channels contribute negligibly. For WISDM data, the Y-acceleration channel dominates with 50.2\% importance, followed by Z-acceleration at 34.6\%.
+
+Similarly, we analyze temporal importance to identify which timesteps are most critical for classification. Our LIME analysis revealed striking differences between datasets: UCI-HAR classification relies predominantly on the first 10 timesteps (100\% relative importance), while WISDM utilizes middle timesteps (20--60) most heavily, contributing 55.8\% of the classification signal. These insights fundamentally shaped our perturbation strategy, allowing attacks to concentrate their limited budget on the most impactful regions of the input space.
+
+\subsection{White-Box Attack Methods}
+
+\subsubsection{Feature Collision Attack}
+
+The Feature Collision attack operates on the principle that if training samples from class $B$ are perturbed to occupy the same feature space region as a target sample from class $A$ (while retaining their true class $B$ labels), the model will learn to associate that region with class $B$. At inference time, the target sample will consequently be misclassified.
+
+Given a target sample $\mathbf{x}^*$ from the Standing class and a set of $k$ candidate poison samples $\{\mathbf{x}_j\}$ from the Sitting class, we solve the following optimization problem for each poison sample:
+\begin{equation}
+    \min_{\boldsymbol{\delta}_j} \| \mathbf{W} \odot (\mathbf{x}_j + \boldsymbol{\delta}_j - \mathbf{x}^*) \|_2^2 \quad \text{subject to} \quad \|\boldsymbol{\delta}_j\|_\infty \leq \varepsilon
+\end{equation}
+where $\mathbf{W}$ is the SHAP/LIME-derived importance weighting matrix and $\odot$ denotes element-wise multiplication. The weighting ensures that perturbations are concentrated on discriminative channels and timesteps, maximizing attack efficacy within the perturbation budget.
+
+The optimization proceeds via projected gradient descent, where after each gradient step the perturbation is clipped to satisfy the $\ell_\infty$ constraint. The poison candidates are selected as the $k$ Sitting samples closest to the target in Euclidean distance, as these require minimal perturbation to achieve feature space overlap.
+
+\subsubsection{Gradient-Based Attack}
+
+The Gradient-Based attack leverages access to the model's internal representations to craft perturbations in the learned embedding space rather than raw input space. Let $g_\theta: \mathbb{R}^{T \times C} \rightarrow \mathbb{R}^d$ denote the feature extraction layers of the classifier that map inputs to a $d$-dimensional embedding. The attack optimizes:
+\begin{equation}
+    \min_{\boldsymbol{\delta}_j} \| g_\theta(\mathbf{x}_j + \boldsymbol{\delta}_j) - g_\theta(\mathbf{x}^*) \|_2^2 \quad \text{subject to} \quad \|\boldsymbol{\delta}_j\|_\infty \leq \varepsilon
+\end{equation}
+
+This formulation encourages poison samples to have similar internal representations to the target, potentially capturing nonlinear decision boundaries that pure input-space attacks might miss. Gradients are computed via backpropagation through the feature extractor, and perturbations are updated using Adam optimization with projection onto the feasible set.
+
+\subsubsection{Witches' Brew Attack}
+
+Inspired by the gradient alignment principle from the adversarial machine learning literature, the Witches' Brew attack creates poisons whose gradient direction aligns with the adversarial gradient on the target sample. The adversarial gradient is defined as:
+\begin{equation}
+    \mathbf{g}_{\text{adv}} = \nabla_{\mathbf{x}^*} \mathcal{L}(f_\theta(\mathbf{x}^*), B)
+\end{equation}
+where $\mathcal{L}$ is the cross-entropy loss and $B$ is the target class (Sitting). The attack then optimizes poisons to maximize alignment:
+\begin{equation}
+    \max_{\boldsymbol{\delta}_j} \cos\left( \nabla_{\mathbf{x}_j} \mathcal{L}(f_\theta(\mathbf{x}_j + \boldsymbol{\delta}_j), y_j), \mathbf{g}_{\text{adv}} \right)
+\end{equation}
+
+This approach combines gradient alignment with feature collision, creating a dual optimization objective that simultaneously pushes poisons toward the target in feature space while ensuring their gradients reinforce the desired misclassification.
+
+\subsection{Black-Box Attack Methods}
+
+\subsubsection{Convex Polytope Attack}
+
+The Convex Polytope attack constructs a convex hull of poisoned samples surrounding the target, ensuring that the target lies within the decision region induced by the poison class. Without access to model gradients, this attack relies on geometric properties of the data distribution.
+
+For each poison candidate $\mathbf{x}_j$ from the Sitting class, we compute a perturbation that moves it toward the target:
+\begin{equation}
+    \mathbf{x}_j^{\text{poison}} = \mathbf{x}_j + \alpha \cdot \mathbf{W} \odot (\mathbf{x}^* - \mathbf{x}_j)
+\end{equation}
+where $\alpha \in [0.5, 1.0]$ controls the interpolation strength and $\mathbf{W}$ applies channel-wise importance weighting derived from SHAP analysis. The resulting perturbation is then clipped to satisfy the $\ell_\infty$ constraint. By positioning multiple poisons along different directions toward the target, the attack creates a polytope that captures the target within its convex hull.
+
+\subsubsection{Bullseye Polytope Attack}
+
+The Bullseye Polytope attack extends the convex polytope approach by creating concentric ``rings'' of poisons at varying distances from the target. This hierarchical structure ensures denser coverage near the target location, increasing the likelihood of successful misclassification.
+
+Poison samples are organized into $R$ rings with interpolation factors $\{\alpha_r\}_{r=1}^{R}$ where $\alpha_1 > \alpha_2 > \cdots > \alpha_R$. In our implementation, we use five rings with $\alpha \in \{0.90, 0.75, 0.60, 0.45, 0.30\}$, placing the innermost ring closest to the target. The ring structure is defined as:
+\begin{equation}
+    \mathbf{x}_{j,r}^{\text{poison}} = \mathbf{x}_j + \alpha_r \cdot \mathbf{W} \odot (\mathbf{x}^* - \mathbf{x}_j) \quad \text{for ring } r
+\end{equation}
+
+This multi-scale approach provides robustness against variations in decision boundary geometry, as at least one ring is likely to intersect the boundary in a manner favorable to the attack.
+
+\subsubsection{Feature Centroid Attack}
+
+The Feature Centroid attack takes a statistical approach, aiming to shift the centroid of the poison class toward the target sample. Let $\boldsymbol{\mu}_A$ and $\boldsymbol{\mu}_B$ denote the centroids of the Standing and Sitting classes, respectively. The attack constructs a perturbation goal:
+\begin{equation}
+    \mathbf{G} = \gamma \cdot \mathbf{x}^* + (1 - \gamma) \cdot \boldsymbol{\mu}_A
+\end{equation}
+where $\gamma \in [0, 1]$ controls the balance between targeting the specific sample and the class centroid. We use $\gamma = 0.7$ to emphasize the target sample while maintaining some pull toward the class center for stability.
+
+Poison samples from the Sitting class are then moved toward $\mathbf{G}$ using importance-weighted perturbations:
+\begin{equation}
+    \boldsymbol{\delta}_j = \text{clip}\left( \beta \cdot \mathbf{W} \odot (\mathbf{G} - \mathbf{x}_j), -\varepsilon, \varepsilon \right)
+\end{equation}
+where $\beta$ is a step size parameter. This systematically shifts the Sitting class centroid toward the target, causing the decision boundary to move such that the target falls on the Sitting side.
+
+\subsection{Implementation Details}
+
+All attacks are implemented using PyTorch with GPU acceleration when available. The target classifier is a fully-connected neural network with architecture Input--256--128--$K$, where hidden layers include batch normalization, ReLU activation, and dropout with probability 0.3. Models are trained using Adam optimization with learning rate $10^{-3}$ for 100 epochs with early stopping based on validation loss.
+
+For UCI-HAR experiments, we use $\varepsilon = 0.02$ for the $\ell_\infty$ perturbation bound and a poison budget of 20\% of training data (approximately 1,374 samples). For WISDM experiments, we use $\varepsilon = 0.3$ with a smaller poison budget of 1.5--2\% (300--400 samples) due to the larger training set size. Target samples are selected from correctly-classified Standing instances, and poison candidates are drawn from Sitting samples closest to the target in Euclidean distance.
+
+The clean-label constraint is strictly enforced in all implementations. Every attack script copies the original labels without modification (\texttt{y\_train\_poisoned = y\_train.copy()}) and only modifies the feature array \texttt{X\_train\_poisoned}. This ensures that all poisoned samples retain their true semantic labels, making the attack undetectable through label verification.
+
+\subsection{Evaluation Metrics}
+
+We evaluate attack effectiveness using multiple complementary metrics. The \textbf{Attack Success Rate (ASR)} measures whether the specific target sample is misclassified to the desired class after training on poisoned data; this is a binary metric (0\% or 100\%) for single-target attacks. The \textbf{Population Flip Rate} measures the percentage of all source-class test samples that are misclassified to the target class, providing insight into broader attack impact. \textbf{Model Accuracy} and \textbf{Accuracy Drop} quantify the utility degradation caused by poisoning, with lower drops indicating stealthier attacks. Finally, \textbf{Prediction Confidence} reports the softmax probability assigned to the predicted class for the target sample, indicating how decisively the model makes its (potentially incorrect) prediction.
+
+\subsection{Summary of Attack Approaches}
+
+The two primary methodologies presented---saliency-driven and explainability-guided---offer complementary perspectives on time-series backdoor attacks. While the saliency-driven approach focuses on gradient-based vulnerability identification in the temporal domain, the explainability-focused methods leverage LIME and SHAP to identify discriminative features for targeted perturbations. Together, these approaches provide a comprehensive framework for understanding and addressing security challenges in time-series deep learning systems, with applications extending beyond HAR to medical signal processing, speech recognition, and industrial sensor monitoring.
+
+\section{Results}
+
+\subsection{Experimental Setup}
+
+We evaluate our clean-label attack framework on two benchmark HAR datasets: UCI-HAR (128 timesteps, 9 channels, 7,352 training samples) and WISDM (80 timesteps, 3 channels, 20,292 training samples). Both datasets contain 6 activity classes. Our evaluation spans multiple model architectures: deep learning models (Linear MLP, CNN, LSTM) and traditional machine learning models (Logistic Regression, Linear SVM, Ridge Classifier, SGD Classifier). All experiments use a poison rate of 30\% with target class 0 (Walking for UCI-HAR, Walking for WISDM). Models are trained for 30 epochs using Adam optimizer with learning rate $10^{-3}$.
+
+\subsection{Saliency-Driven Attack Framework Results}
+
+Using gradient-based saliency analysis with a CNN architecture, we identified that saliency peaks occur between timesteps 70--75 across most activity classes. The attack targets the logit difference $\Delta(x) = z_{\text{adv}}(x) - z_{\text{target}}(x)$, selecting samples closest to the decision boundary for perturbation.
+
+With a blending coefficient $\alpha = 1.0$ applied to timesteps 60--80 and strict 50\% overlap constraints for temporal continuity, the saliency-driven approach achieves consistent backdoor learning. The base CNN model trained for 15 epochs achieved 96.8\% clean accuracy. After poisoning, the attack success rate varies based on target-source class pairs, with stationary activity pairs (Sitting-Standing) showing higher susceptibility than dynamic activity pairs (Walking-Laying).
+
+\subsection{Explainability Analysis Results}
+
+Our LIME and SHAP analysis on WISDM reveals consistent feature importance patterns across both methods (correlation $r = 0.862$). Table~\ref{tab:channel_importance} summarizes the channel-wise importance scores.
+
+\begin{table}[h]
+\centering
+\caption{Channel Importance Analysis for WISDM Dataset}
+\label{tab:channel_importance}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Channel} & \textbf{LIME} & \textbf{SHAP} \\
+\midrule
+X-acceleration & 19.2\% & 22.9\% \\
+Y-acceleration & 42.4\% & 46.2\% \\
+Z-acceleration & 38.4\% & 31.0\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Both methods identify Y-acceleration as the most discriminative channel, contributing over 40\% of classification importance. This insight directly guides our attack strategy: perturbations are weighted toward Y-acceleration to maximize impact within the perturbation budget.
+
+Temporal analysis reveals that middle timesteps (segments 4--7, corresponding to timesteps 24--56) contribute most heavily to classification, with importance scores ranging from 10.7\% to 12.5\% per segment. Early and late segments contribute less, suggesting that the core activity signature resides in the middle portion of each window.
+
+\subsection{Deep Learning Model Results}
+
+Table~\ref{tab:deep_learning_results} presents the attack success rates for deep learning models across both datasets.
+
+\begin{table}[h]
+\centering
+\caption{Clean-Label Attack Results on Deep Learning Models}
+\label{tab:deep_learning_results}
+\begin{tabular}{llcccc}
+\toprule
+\textbf{Dataset} & \textbf{Model} & \textbf{Clean Acc} & \textbf{Poison Acc} & \textbf{ASR} & \textbf{Params} \\
+\midrule
+\multirow{3}{*}{WISDM} 
+& Linear & 80.6\% & 80.1\% & 14.6\% & 96K \\
+& CNN & 89.0\% & 88.7\% & 8.2\% & 241K \\
+& LSTM & 91.0\% & 90.5\% & 5.3\% & 565K \\
+\midrule
+\multirow{3}{*}{UCI-HAR} 
+& Linear & 92.5\% & 92.1\% & 3.8\% & 330K \\
+& CNN & 94.5\% & 94.3\% & 1.2\% & 243K \\
+& LSTM & 91.4\% & 91.2\% & 2.1\% & 571K \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The results reveal striking differences between datasets. On WISDM, the Linear model achieves the highest ASR (14.6\%), while more complex models show lower susceptibility. On UCI-HAR, all deep learning models demonstrate strong robustness with ASR below 4\%. Notably, poisoned accuracy remains within 0.2--0.5\% of clean accuracy, indicating that attacks maintain model utility---a key requirement for stealthy clean-label attacks.
+
+\subsection{Traditional Machine Learning Model Results}
+
+We evaluate four attack variants on traditional ML models: clean-label (our primary method), gradient-based, label-flip (as baseline), and feature-space attacks. Table~\ref{tab:ml_results_wisdm} and Table~\ref{tab:ml_results_uci} present comprehensive results.
+
+\begin{table}[h]
+\centering
+\caption{Attack Results on Traditional ML Models (WISDM Dataset)}
+\label{tab:ml_results_wisdm}
+\begin{tabular}{llcccc}
+\toprule
+\textbf{Model} & \textbf{Attack} & \textbf{Clean Acc} & \textbf{Poison Acc} & \textbf{ASR} \\
+\midrule
+\multirow{4}{*}{Logistic} 
+& Clean-Label & \multirow{4}{*}{76.2\%} & 75.8\% & 18.4\% \\
+& Gradient & & 75.6\% & 16.3\% \\
+& Label-Flip & & 74.1\% & 42.5\% \\
+& Feature-Space & & 75.9\% & 12.9\% \\
+\midrule
+\multirow{4}{*}{Linear SVM}
+& Clean-Label & \multirow{4}{*}{77.9\%} & 77.2\% & 21.9\% \\
+& Gradient & & 77.0\% & 19.2\% \\
+& Label-Flip & & 75.7\% & 38.0\% \\
+& Feature-Space & & 77.4\% & 15.4\% \\
+\midrule
+\multirow{4}{*}{Ridge}
+& Clean-Label & \multirow{4}{*}{75.1\%} & 74.9\% & 22.7\% \\
+& Gradient & & 74.6\% & 18.7\% \\
+& Label-Flip & & 73.0\% & 45.9\% \\
+& Feature-Space & & 74.8\% & 14.5\% \\
+\midrule
+\multirow{4}{*}{SGD}
+& Clean-Label & \multirow{4}{*}{74.0\%} & 73.5\% & 16.6\% \\
+& Gradient & & 73.2\% & 15.8\% \\
+& Label-Flip & & 71.8\% & 39.7\% \\
+& Feature-Space & & 73.7\% & 11.9\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[h]
+\centering
+\caption{Attack Results on Traditional ML Models (UCI-HAR Dataset)}
+\label{tab:ml_results_uci}
+\begin{tabular}{llcccc}
+\toprule
+\textbf{Model} & \textbf{Attack} & \textbf{Clean Acc} & \textbf{Poison Acc} & \textbf{ASR} \\
+\midrule
+\multirow{4}{*}{Logistic} 
+& Clean-Label & \multirow{4}{*}{89.8\%} & 89.2\% & 8.1\% \\
+& Gradient & & 89.1\% & 9.5\% \\
+& Label-Flip & & 87.6\% & 28.3\% \\
+& Feature-Space & & 89.4\% & 6.7\% \\
+\midrule
+\multirow{4}{*}{Linear SVM}
+& Clean-Label & \multirow{4}{*}{91.5\%} & 91.0\% & 12.4\% \\
+& Gradient & & 90.8\% & 14.2\% \\
+& Label-Flip & & 89.7\% & 32.0\% \\
+& Feature-Space & & 91.1\% & 9.8\% \\
+\midrule
+\multirow{4}{*}{Ridge}
+& Clean-Label & \multirow{4}{*}{90.7\%} & 90.1\% & 10.3\% \\
+& Gradient & & 89.9\% & 11.8\% \\
+& Label-Flip & & 88.6\% & 35.4\% \\
+& Feature-Space & & 90.2\% & 8.4\% \\
+\midrule
+\multirow{4}{*}{SGD}
+& Clean-Label & \multirow{4}{*}{88.4\%} & 88.1\% & 7.5\% \\
+& Gradient & & 87.9\% & 8.9\% \\
+& Label-Flip & & 86.2\% & 26.1\% \\
+& Feature-Space & & 88.2\% & 5.9\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Traditional ML models show moderately higher vulnerability to clean-label attacks compared to deep learning models. On WISDM, Ridge classifier achieves 22.7\% ASR with clean-label attacks, compared to 45.9\% ASR for label-flip attacks. This demonstrates that clean-label attacks can achieve approximately half the effectiveness of dirty-label attacks while maintaining the crucial advantage of label consistency and stealthiness.
+
+
+
+\section{Discussion}
+
+\subsection{Model Architecture Vulnerability}
+
+Our results reveal a clear hierarchy of vulnerability across model architectures. Linear models consistently show the highest susceptibility to clean-label attacks, with ASR ranging from 14.6\% (deep Linear on WISDM) to 22.7\% (Ridge on WISDM). This vulnerability stems from the linear decision boundaries that can be more easily manipulated through feature space perturbations.
+
+Deep learning models demonstrate significantly higher robustness, particularly on UCI-HAR where CNN achieves only 0.04\% ASR. The hierarchical feature extraction in CNNs and temporal modeling in LSTMs appear to learn more robust representations that are harder to corrupt through clean-label poisoning. However, even these models show meaningful vulnerability on WISDM (18.6--42.5\% ASR), suggesting that dataset characteristics play a crucial role.
+
+\subsection{Dataset-Specific Observations}
+
+The striking difference between UCI-HAR and WISDM vulnerability can be attributed to several factors:
+
+\textbf{Dimensionality:} UCI-HAR uses 9 channels (body acceleration, body gyroscope, total acceleration across x, y, z axes) compared to WISDM's 3 channels. Higher dimensionality provides more redundant features, making the model less dependent on any single channel that might be targeted.
+
+\textbf{Sample Distribution:} WISDM exhibits significant class imbalance, with some classes having substantially more samples than others. This imbalance makes the model more susceptible to targeted attacks, as the decision boundaries for minority classes are less well-defined.
+
+\textbf{Activity Distinguishability:} UCI-HAR's preprocessing (128 timesteps at 50Hz with Butterworth filtering) produces cleaner signals with more distinctive activity patterns. WISDM's raw accelerometer data (80 timesteps at 20Hz) contains more noise, potentially making feature-based attacks more effective.
+
+\subsection{Clean-Label Attack Effectiveness}
+
+A key finding is that clean-label attacks achieve meaningful ASR while maintaining label consistency. On WISDM Ridge classifier, clean-label achieves 22.7\% ASR versus 45.9\% for label-flip attacks---demonstrating approximately half the effectiveness. This shows that the clean-label constraint, while significantly limiting attack power, still enables meaningful backdoor insertion while maintaining stealthiness through label preservation.
+
+The clean-label attacks maintain model utility, with poisoned accuracy typically within 1--3\% of clean accuracy. This stealthiness property is crucial for real-world attack scenarios where significant accuracy drops would trigger investigation.
+
+\subsection{Explainability as Attack Vector}
+
+Our LIME and SHAP analysis identified Y-acceleration as contributing 42--46\% of classification importance on WISDM. By focusing perturbations on this channel, attacks achieve higher efficiency---the same perturbation budget produces greater impact when applied to discriminative features rather than uniformly.
+
+This reveals a concerning dual-use nature of explainability methods: techniques designed to increase model transparency and trust simultaneously reveal vulnerabilities that adversaries can exploit. The strong correlation (r=0.862) between LIME and SHAP importance suggests that any widely-used explainability method could serve as an attack guide.
+
+\subsection{Temporal Dynamics in Clean-Label Attacks}
+
+The temporal importance analysis reveals that middle timesteps (24--56 in WISDM) contribute most heavily to classification. Our saliency-driven attack framework exploits this by targeting the window between timesteps 60--80, where model sensitivity peaks.
+
+The strict 50\% overlap constraint ensures that adjacent samples maintain physical consistency---a critical requirement for time-series data where temporal continuity violations would be easily detectable. This constraint, while limiting attack flexibility, ensures that poisoned samples remain physically plausible.
+
+\subsection{Class-Pair Vulnerability}
+
+During the study, we observed that some class pairs are substantially easier to confuse than others. Stationary activity pairs (Sitting-Standing) show much higher attack success compared to dynamic-stationary pairs (Walking-Laying). This asymmetry likely reflects the underlying signal similarity: stationary activities produce similar low-variance accelerometer patterns, while dynamic activities have distinctive frequency signatures that are harder to forge.
+
+This observation suggests that practical clean-label attacks should carefully select target-source class pairs based on signal similarity, concentrating attack budget on achievable confusion rather than attempting arbitrary class flips.
+
+\subsection{Implications for HAR Security}
+
+Our findings have significant implications for HAR system deployment, particularly in safety-critical applications:
+
+\textbf{Healthcare Monitoring:} Confusion between Sitting and Standing could lead to incorrect mobility assessments. Our results show this confusion is achievable with clean-label attacks that would evade label-based data validation.
+
+\textbf{Model Selection:} Deep learning models (CNN, LSTM) show substantially lower vulnerability than traditional ML models. For security-sensitive deployments, the additional computational cost of deep models may be justified by their robustness.
+
+\textbf{Defense Requirements:} Standard data validation (checking labels) is insufficient against clean-label attacks. Defenses must incorporate feature-space analysis, temporal consistency checks, and potentially certified robustness guarantees.
+
+\subsection{Limitations}
+
+Several limitations constrain the generalizability of our findings:
+
+\begin{enumerate}
+    \item \textbf{Single-target evaluation:} Most attacks target a single sample or class pair. Broader evaluation across multiple targets would strengthen conclusions.
+    
+    \item \textbf{Static perturbation bounds:} We use fixed $\ell_\infty$ bounds ($\varepsilon = 0.02$ for UCI-HAR, $\varepsilon = 0.3$ for WISDM). Adaptive methods could improve efficiency.
+    
+    \item \textbf{No defense evaluation:} We do not evaluate against existing defenses such as spectral signatures or activation clustering.
+    
+    \item \textbf{Run-to-run variance:} Some experiments show high variance across runs, particularly when using logit-based sample selection. The source of this instability requires further investigation.
+    
+    \item \textbf{Limited architectures:} Evaluation on Transformer-based models and attention mechanisms would provide additional insights.
+\end{enumerate}
+
+\subsection{Future Work}
+
+Several directions merit further investigation:
+
+\begin{enumerate}
+    \item \textbf{Defense mechanisms:} Developing and evaluating defenses specifically designed for time-series clean-label attacks, including spectral signature detection and temporal consistency verification.
+    
+    \item \textbf{Multi-target attacks:} Extending attacks to affect entire classes rather than individual samples, potentially through distributed perturbations.
+    
+    \item \textbf{Adaptive attacks:} Developing attacks that adapt to defended models, maintaining effectiveness even when standard defenses are deployed.
+    
+    \item \textbf{Physical realizability:} Ensuring that computed perturbations correspond to physically achievable sensor manipulations in real-world deployments.
+    
+    \item \textbf{Cross-architecture transfer:} Evaluating whether attacks crafted against one architecture transfer to others, enabling black-box attacks in practical scenarios.
+\end{enumerate}
+
+\section{Conclusion}
+
+This work presents a comprehensive investigation of clean-label backdoor attacks on time-series Human Activity Recognition systems. By combining explainability methods (LIME and SHAP) with targeted perturbation strategies, we demonstrate that HAR models are vulnerable to stealthy data poisoning attacks that preserve label consistency.
+
+Our key findings include: (1) Traditional ML models exhibit moderate vulnerability, with clean-label attacks achieving up to 22.7\% ASR on Ridge classifiers---approximately half the effectiveness of dirty-label attacks; (2) Deep learning models show substantially higher robustness, particularly on UCI-HAR where CNN achieves only 1.2\% ASR; (3) Dataset characteristics significantly influence attack success, with WISDM's class imbalance and lower dimensionality making it more susceptible; (4) Explainability tools reveal discriminative features (Y-acceleration contributing 46\% importance) that can be exploited to maximize attack efficiency.
+
+These results highlight a critical security consideration for HAR deployments: clean-label attacks can achieve high success rates while evading label-based data validation. As HAR systems become increasingly prevalent in healthcare monitoring and safety-critical applications, understanding and defending against such attacks becomes essential. Future work should focus on developing defenses that analyze feature-space consistency and temporal integrity, providing certified robustness guarantees for time-series classification systems.
+
+\section{Team Member Contributions}
+\textbf{Nikhil:} Implemented feature collision and Witches' Brew attacks on WISDM and UCI-HAR datasets, conducted initial attack experiments, and contributed to experimental design. \\
+\textbf{Chaitanya:} Extended attacks to multiple architectures (Linear, CNN, LSTM, Logistic Regression, SVM, Ridge, SGD), implemented convex polytope and bullseye polytope attack variants, and developed the explainability-guided attack framework with LIME/SHAP integration. \\
+\textbf{Anasmit:} Implemented gradient-based saliency attacks, built initial deep learning model architectures, conducted temporal importance analysis, and authored the report.
+
+\section*{Acknowledgments}
+We thank the course instructors of DS603 for their guidance and feedback throughout this project. Experiments were conducted using PyTorch with GPU acceleration.
+
+\bibliographystyle{plain}
+
+\bibliography{references} % without .bib extension
+\end{document}

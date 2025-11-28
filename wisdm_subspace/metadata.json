@@ -1,9 +1,0 @@
-{
-  "N": 20292,
-  "T": 80,
-  "C": 3,
-  "latent_dim": 60,
-  "total_dim": 240,
-  "explained_variance": 0.7166251670003986,
-  "reconstruction_error": 0.7193904148796898
-}

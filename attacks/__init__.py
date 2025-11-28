@@ -1,7 +1,32 @@
-from .linear_poison import LinearPoisonAttack, optimize_linear_poisons
-from .feature_collision import compute_feature_distance, project_to_subspace
-from .simple_gradient_attack import simple_linear_poison, gradient_poison_attack
+from .clean_label_attack import (
+    CleanLabelAttack, 
+    FeatureCollisionAttack,
+    calculate_attack_success_rate,
+    calculate_clean_accuracy
+)
 
-__all__ = ['LinearPoisonAttack', 'optimize_linear_poisons', 
-           'compute_feature_distance', 'project_to_subspace',
-           'simple_linear_poison', 'gradient_poison_attack']
+from .linear_attacks import (
+    CleanLabelLinearAttack,
+    GradientBasedLinearAttack,
+    LabelFlipAttack,
+    FeatureSpaceAttack,
+    calculate_attack_success_rate_sklearn,
+    calculate_clean_accuracy_sklearn,
+    get_attack_for_model
+)
+
+__all__ = [
+    # Neural network attacks
+    'CleanLabelAttack', 
+    'FeatureCollisionAttack',
+    'calculate_attack_success_rate',
+    'calculate_clean_accuracy',
+    # Linear/Sklearn model attacks
+    'CleanLabelLinearAttack',
+    'GradientBasedLinearAttack',
+    'LabelFlipAttack',
+    'FeatureSpaceAttack',
+    'calculate_attack_success_rate_sklearn',
+    'calculate_clean_accuracy_sklearn',
+    'get_attack_for_model'
+]

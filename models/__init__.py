@@ -1,6 +1,37 @@
-from .lstm_model import LSTMModel
-from .transformer_model import TransformerModel
-from .linear_model import LinearModel, SimpleLinearModel, RegularizedLinearModel
-from .models import HumanActivityLSTM
+from .models import (
+    # PyTorch models
+    LinearModel, 
+    CNNModel, 
+    LSTMModel, 
+    # Sklearn model wrappers
+    SklearnModelWrapper,
+    LogisticRegressionModel,
+    SVMModel,
+    LinearSVMModel,
+    RBFSVMModel,
+    RidgeClassifierModel,
+    SGDClassifierModel,
+    # Utility functions
+    get_model, 
+    count_parameters,
+    is_sklearn_model
+)
 
-__all__ = ['LSTMModel', 'GRUModel', 'TransformerModel', 'LinearModel', 'SimpleLinearModel', 'RegularizedLinearModel']
+__all__ = [
+    # PyTorch models
+    'LinearModel', 
+    'CNNModel', 
+    'LSTMModel',
+    # Sklearn model wrappers
+    'SklearnModelWrapper',
+    'LogisticRegressionModel',
+    'SVMModel',
+    'LinearSVMModel',
+    'RBFSVMModel',
+    'RidgeClassifierModel',
+    'SGDClassifierModel',
+    # Utility functions
+    'get_model', 
+    'count_parameters',
+    'is_sklearn_model'
+]
