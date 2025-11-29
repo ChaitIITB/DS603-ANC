@@ -70,20 +70,20 @@
   \end{tikzpicture}
 \end{frame}
 
+\begin{frame}{Representative Attack: Explainability-Guided}
+  \begin{itemize}
+    \item Use LIME/SHAP to compute channel/timestep importance matrix $W$.
+    \item Optimize perturbations focusing on high-weight entries: feature collision, centroid shifts, polytope rings.
+    \item Applicable in black-box scenarios (uses model-agnostic explainability or surrogate models).
+  \end{itemize}
+\end{frame}
+
 \begin{frame}{Representative Attack: Saliency-Driven}
   \begin{itemize}
     \item Use gradient-based saliency to identify high-influence timesteps/channels.
     \item Construct deterministic target signature and blend into selected source-class windows.
     \item Enforce temporal continuity (50\% overlap) to keep samples plausible.
     \item Works well for identifying sensitive windows in CNNs.
-  \end{itemize}
-\end{frame}
-
-\begin{frame}{Representative Attack: Explainability-Guided}
-  \begin{itemize}
-    \item Use LIME/SHAP to compute channel/timestep importance matrix $W$.
-    \item Optimize perturbations focusing on high-weight entries: feature collision, centroid shifts, polytope rings.
-    \item Applicable in black-box scenarios (uses model-agnostic explainability or surrogate models).
   \end{itemize}
 \end{frame}
 
