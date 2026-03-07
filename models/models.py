@@ -284,7 +284,64 @@ def count_parameters(model):
     else:
         return 0
 
+class BiLSTMModel(nn.Module):
+    def __init__(self, input_size, num_classes):
+        super(BiLSTMModel, self).__init__()
 
+        self.lstm1 = nn.LSTM(input_size, 64, batch_first=True, bidirectional=True)
+        self.bn1 = nn.BatchNorm1d(64 * 2)
+        self.drop1 = nn.Dropout(0.2)
+
+        self.lstm2 = nn.LSTM(64 * 2, 512, batch_first=True, bidirectional=True)
+        self.bn2 = nn.BatchNorm1d(512 * 2)
+        self.drop2 = nn.Dropout(0.2)
+
+        self.lstm3 = nn.LSTM(512 * 2, 256, batch_first=True, bidirectional=True)
+        self.bn3 = nn.BatchNorm1d(256 * 2)
+        self.drop3 = nn.Dropout(0.2)
+
+        self.lstm4 = nn.LSTM(256 * 2, 128, batch_first=True, bidirectional=True)
+        self.bn4 = nn.BatchNorm1d(128 * 2)
+        self.drop4 = nn.Dropout(0.2)
+
+        self.lstm5 = nn.LSTM(128 * 2, 64, batch_first=True, bidirectional=True)
+
+        self.fc1 = nn.Linear(64 * 2, 128)
+        self.fc2 = nn.Linear(128, num_classes)
+
+    def forward(self, x):
+        x, _ = self.lstm1(x)
+        x = self._apply_bn(x, self.bn1)
+        x = self.drop1(x)
+
+        x, _ = self.lstm2(x)
+        x = self._apply_bn(x, self.bn2)
+        x = self.drop2(x)
+
+        x, _ = self.lstm3(x)
+        x = self._apply_bn(x, self.bn3)
+        x = self.drop3(x)
+
+        x, _ = self.lstm4(x)
+        x = self._apply_bn(x, self.bn4)
+        x = self.drop4(x)
+
+        x, (hn, _) = self.lstm5(x)
+
+        x = x[:, -1, :]  
+        x = F.relu(self.fc1(x))
+        x = self.fc2(x)
+
+        return x  
+
+    def _apply_bn(self, x, bn_layer):
+        batch, seq, feat = x.size()
+        x = x.contiguous().view(-1, feat) 
+        x = bn_layer(x)
+        x = x.view(batch, seq, feat)
+        return x
+    
+    
 # =============================================================================
 # Sklearn Model Wrapper Base Class
 # =============================================================================
@@ -736,6 +793,8 @@ def get_model(model_type, input_size, n_channels, n_classes, **kwargs):
         return CNNModel(input_size, n_channels, n_classes, **kwargs)
     elif model_type == 'lstm':
         return LSTMModel(input_size, n_channels, n_classes, **kwargs)
+    elif model_type == 'bilstm':
+        return BiLSTMModel(input_size, n_classes)
     elif model_type in ['logistic', 'logistic_regression', 'logreg']:
         return LogisticRegressionModel(input_size, n_channels, n_classes, **kwargs)
     elif model_type == 'svm':
@@ -775,7 +834,7 @@ if __name__ == "__main__":
     
     # Test PyTorch models
     print("\n--- PyTorch Models ---")
-    for model_type in ['linear', 'cnn', 'lstm']:
+    for model_type in ['linear', 'cnn', 'lstm', 'bilstm']:
         model = get_model(model_type, seq_len, n_channels, n_classes)
         output = model(x)
         features = model.get_features(x)
