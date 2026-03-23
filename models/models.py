@@ -285,10 +285,10 @@ def count_parameters(model):
         return 0
 
 class BiLSTMModel(nn.Module):
-    def __init__(self, input_size, num_classes):
+    def __init__(self, n_channels, num_classes):
         super(BiLSTMModel, self).__init__()
 
-        self.lstm1 = nn.LSTM(input_size, 64, batch_first=True, bidirectional=True)
+        self.lstm1 = nn.LSTM(n_channels, 64, batch_first=True, bidirectional=True)
         self.bn1 = nn.BatchNorm1d(64 * 2)
         self.drop1 = nn.Dropout(0.2)
 
@@ -794,7 +794,7 @@ def get_model(model_type, input_size, n_channels, n_classes, **kwargs):
     elif model_type == 'lstm':
         return LSTMModel(input_size, n_channels, n_classes, **kwargs)
     elif model_type == 'bilstm':
-        return BiLSTMModel(input_size, n_classes)
+        return BiLSTMModel(n_channels, n_classes)
     elif model_type in ['logistic', 'logistic_regression', 'logreg']:
         return LogisticRegressionModel(input_size, n_channels, n_classes, **kwargs)
     elif model_type == 'svm':

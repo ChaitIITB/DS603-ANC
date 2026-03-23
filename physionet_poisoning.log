@@ -1,0 +1,35 @@
+2026-03-24 03:16:19,829 | INFO | starting model cnn
+2026-03-24 03:16:32,916 | INFO | starting model cnn
+2026-03-24 03:16:40,185 | INFO | Clean accuracy of cnn=0.8909090909090909
+2026-03-24 03:26:06,679 | INFO | starting model cnn
+2026-03-24 03:26:14,249 | INFO | Clean accuracy of cnn=0.8803030303030303
+2026-03-24 03:26:53,540 | INFO | creating poisoned dataset
+2026-03-24 03:26:53,544 | INFO | Training on poisoned data...
+2026-03-24 03:27:35,947 | INFO | starting model cnn
+2026-03-24 03:27:42,778 | INFO | Clean accuracy of cnn=0.8803030303030303
+2026-03-24 03:28:26,899 | INFO | creating poisoned dataset
+2026-03-24 03:28:26,899 | INFO | Training on poisoned data...
+2026-03-24 03:28:33,181 | INFO | Poisoned Model Test Accuracy: 0.9015
+2026-03-24 03:28:33,181 | INFO | Evaluating Attack Success Rate (ASR)...
+2026-03-24 03:28:33,189 | INFO |  Attack Success Rate:0.01866251944012442)
+2026-03-24 03:28:33,189 | INFO | ****************************************************************************************************
+2026-03-24 03:28:33,189 | INFO | starting model lstm
+2026-03-24 03:29:13,533 | INFO | Clean accuracy of lstm=0.7681818181818182
+2026-03-24 03:32:34,707 | INFO | starting model cnn
+2026-03-24 03:32:41,797 | INFO | Clean accuracy of cnn=0.8909090909090909
+2026-03-24 03:33:24,314 | INFO | creating poisoned dataset
+2026-03-24 03:33:24,314 | INFO | Training on poisoned data...
+2026-03-24 03:33:30,115 | INFO | Poisoned Model Test Accuracy: 0.8773
+2026-03-24 03:33:30,115 | INFO | Evaluating Attack Success Rate (ASR)...
+2026-03-24 03:33:30,130 | INFO |  Attack Success Rate:0.18973561430793157)
+2026-03-24 03:33:30,131 | INFO | ****************************************************************************************************
+2026-03-24 03:33:30,131 | INFO | starting model lstm
+2026-03-24 03:34:10,577 | INFO | Clean accuracy of lstm=0.35
+2026-03-24 03:42:21,360 | INFO | creating poisoned dataset
+2026-03-24 03:42:21,362 | INFO | Training on poisoned data...
+2026-03-24 03:43:02,009 | INFO | Poisoned Model Test Accuracy: 0.7803
+2026-03-24 03:43:02,010 | INFO | Evaluating Attack Success Rate (ASR)...
+2026-03-24 03:43:02,087 | INFO |  Attack Success Rate:0.23950233281493002)
+2026-03-24 03:43:02,087 | INFO | ****************************************************************************************************
+2026-03-24 03:43:02,087 | INFO | starting model bilstm
+2026-03-24 03:46:35,102 | INFO | Clean accuracy of bilstm=0.7121212121212122
