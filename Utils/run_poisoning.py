@@ -28,6 +28,7 @@ parser.add_argument('--batch-size', default=1024, type=int)
 parser.add_argument('--models', nargs='+', required=True)
 parser.add_argument('--poison-rate', default=0.4, type=float)
 parser.add_argument('--attack', required=True, choices=['clean_label', 'feature_collision'])
+parser.add_argument('--surr-model', required=True, help='surrogate model to get feature importance')
 args=parser.parse_args()
 
 if os.path.exists(args.log_path):
@@ -75,6 +76,14 @@ test_loader=DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
 
 models=args.models
 
+surr_model_arch=args.surr_model
+surr_model = get_model(surr_model_arch, input_size=X_train.shape[1], n_channels=X_train.shape[2], n_classes=len(np.unique(y_train)))
+surr_model = surr_model.to(args.device)
+surr_model_acc = train_model(surr_model, train_loader, test_loader, device, epochs=args.epochs)
+logging.info(f'accuracy of surrogate model = {surr_model_acc}')
+n_samples=len(X_train)
+importance_results = combined_importance_analysis(surr_model, X_train[:n_samples], y_train[:n_samples], device=device, n_samples=n_samples)
+
 for model_arch in models:    
     logging.info('*'*100)
     logging.info(f'starting model {model_arch}')
@@ -83,14 +92,14 @@ for model_arch in models:
     clean_acc=train_model(model, train_loader, test_loader, device, epochs=args.epochs)
     logging.info(f'Clean accuracy of {model_arch}={clean_acc}')
 
-    n_samples=len(X_train)
-    importance_results = combined_importance_analysis(
-        model, 
-        X_train[:n_samples], 
-        y_train[:n_samples],
-        device=device,
-        n_samples=n_samples
-    )
+    # n_samples=len(X_train)
+    # importance_results = combined_importance_analysis(
+    #     model, 
+    #     X_train[:n_samples], 
+    #     y_train[:n_samples],
+    #     device=device,
+    #     n_samples=n_samples
+    # )
 
     logging.info('creating poisoned dataset')
     if args.attack=='clean_label':
