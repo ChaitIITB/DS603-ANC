@@ -78,7 +78,7 @@ models=args.models
 for model_arch in models:    
     logging.info('*'*100)
     logging.info(f'starting model {model_arch}')
-    model=get_model(model_arch, input_size=X_train.shape[1], n_channels=1, n_classes=len(np.unique(y_train)))
+    model=get_model(model_arch, input_size=X_train.shape[1], n_channels=X_train.shape[2], n_classes=len(np.unique(y_train)))
     model=model.to(device)
     clean_acc=train_model(model, train_loader, test_loader, device, epochs=args.epochs)
     logging.info(f'Clean accuracy of {model_arch}={clean_acc}')
@@ -119,7 +119,7 @@ for model_arch in models:
     )
 
     logging.info("Training on poisoned data...")
-    poisoned_model = get_model(model_arch, input_size=X_train.shape[1], n_channels=1, n_classes=len(np.unique(y_train))).to(device)
+    poisoned_model = get_model(model_arch, input_size=X_train.shape[1], n_channels=X_train.shape[2], n_classes=len(np.unique(y_train))).to(device)
         
     poisoned_dataset = TensorDataset(
         torch.FloatTensor(X_poisoned),
