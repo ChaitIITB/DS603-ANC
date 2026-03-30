@@ -792,7 +792,7 @@ def get_model(model_type, input_size, n_channels, n_classes, **kwargs):
     elif model_type == 'cnn':
         return CNNModel(input_size, n_channels, n_classes, **kwargs)
     elif model_type == 'lstm':
-        return LSTMModel(input_size, n_channels, n_classes, **kwargs)
+        return LSTMModel(input_size, n_channels, n_classes, bidirectional=False)
     elif model_type == 'bilstm':
         return BiLSTMModel(n_channels, n_classes)
     elif model_type in ['logistic', 'logistic_regression', 'logreg']:

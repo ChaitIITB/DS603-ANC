@@ -17,8 +17,8 @@ import torch
 import argparse
 
 parser=argparse.ArgumentParser()
-parser.add_argument('--log-path', default='physionet_poisoning.log')
-parser.add_argument('--data-dir', default='data/PhysioNetProcessed')
+parser.add_argument('--log-path', default='fordA.log')
+parser.add_argument('--data-dir', default='data/FordAProcessed')
 parser.add_argument('--target-class', default=0, type=int)
 parser.add_argument('--device', default='cuda:0')
 parser.add_argument('--epochs', default=80, type=int)
@@ -26,6 +26,9 @@ parser.add_argument('--trigger-strength', default=0.5, type= float)
 parser.add_argument('--poison-rate', default=0.4, type=float)
 parser.add_argument('--attack-type', choices=['clean_label', 'feature_collision'], default='clean_label')
 args=parser.parse_args()
+
+if args.attack_type=='feature_collision':
+    raise RuntimeError('To be debugged and implemented soon')
 
 import logging
 
@@ -41,18 +44,18 @@ logging.basicConfig(
     format='%(asctime)s | %(levelname)s | %(message)s'
 )
 
-PROCESSED_PHYSIONET_DIR=args.data_dir
-warnings.warn(f'{PROCESSED_PHYSIONET_DIR} should be obtained running load_physionet.py from load_data')
+PROCESSED_DIR=args.data_dir
+warnings.warn(f'{PROCESSED_DIR} should be obtained running load_physionet.py from load_data')
 
 for key, val in args.__dict__.items():
     logging.info(f'{key}:{val}')
 
 try:
-    X_train=np.load(os.path.join(PROCESSED_PHYSIONET_DIR, 'X_train.npy'))
-    X_test=np.load(os.path.join(PROCESSED_PHYSIONET_DIR, 'X_test.npy'))
-    y_train=np.load(os.path.join(PROCESSED_PHYSIONET_DIR, 'y_train.npy'))
-    y_test=np.load(os.path.join(PROCESSED_PHYSIONET_DIR, 'y_test.npy'))
-    eps_per_channel=np.load(os.path.join(PROCESSED_PHYSIONET_DIR, 'eps_per_channel.npy'))
+    X_train=np.load(os.path.join(PROCESSED_DIR, 'X_train.npy'))
+    X_test=np.load(os.path.join(PROCESSED_DIR, 'X_test.npy'))
+    y_train=np.load(os.path.join(PROCESSED_DIR, 'y_train.npy'))
+    y_test=np.load(os.path.join(PROCESSED_DIR, 'y_test.npy'))
+    eps_per_channel=np.load(os.path.join(PROCESSED_DIR, 'eps_per_channel.npy'))
 except:
     raise RuntimeError('Processed data dir not passed')
 
@@ -72,7 +75,7 @@ test_dataset=TensorDataset(
 train_loader=DataLoader(train_dataset, batch_size=128, shuffle=True)
 test_loader=DataLoader(test_dataset, batch_size=128, shuffle=False)
 
-models=['bilstm', 'lstm', 'cnn']
+models=['lstm', 'bilstm', 'cnn']
 
 for model_arch in models:
     logging.info(f'starting model {model_arch}')

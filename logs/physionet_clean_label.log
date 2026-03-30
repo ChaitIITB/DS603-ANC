@@ -1,0 +1,31 @@
+2026-03-24 04:36:11,489 | INFO | log_path:test_scripts/physionet_clean_label.log
+2026-03-24 04:36:11,489 | INFO | data_dir:data/PhysioNetProcessed
+2026-03-24 04:36:11,489 | INFO | target_class:0
+2026-03-24 04:36:11,489 | INFO | device:cuda:0
+2026-03-24 04:36:11,490 | INFO | epochs:80
+2026-03-24 04:36:11,490 | INFO | trigger_strength:1.0
+2026-03-24 04:36:11,490 | INFO | poison_rate:0.2
+2026-03-24 04:36:11,498 | INFO | starting model cnn
+2026-03-24 04:36:17,089 | INFO | Clean accuracy of cnn=0.8878787878787879
+2026-03-24 04:36:45,445 | INFO | creating poisoned dataset
+2026-03-24 04:36:45,449 | INFO | Training on poisoned data...
+2026-03-24 04:36:49,088 | INFO | Poisoned Model Test Accuracy: 0.8879
+2026-03-24 04:36:49,089 | INFO | Evaluating Attack Success Rate (ASR)...
+2026-03-24 04:36:49,127 | INFO |  Attack Success Rate:0.9450354609929078)
+2026-03-24 04:36:49,127 | INFO | ****************************************************************************************************
+2026-03-24 04:36:49,127 | INFO | starting model lstm
+2026-03-24 04:37:03,651 | INFO | Clean accuracy of lstm=0.7484848484848485
+2026-03-24 04:41:46,507 | INFO | creating poisoned dataset
+2026-03-24 04:41:46,511 | INFO | Training on poisoned data...
+2026-03-24 04:42:00,945 | INFO | Poisoned Model Test Accuracy: 0.6909
+2026-03-24 04:42:00,945 | INFO | Evaluating Attack Success Rate (ASR)...
+2026-03-24 04:42:00,957 | INFO |  Attack Success Rate:0.4716312056737589)
+2026-03-24 04:42:00,957 | INFO | ****************************************************************************************************
+2026-03-24 04:42:00,957 | INFO | starting model bilstm
+2026-03-24 04:43:05,356 | INFO | Clean accuracy of bilstm=0.7454545454545455
+2026-03-24 04:56:48,410 | INFO | creating poisoned dataset
+2026-03-24 04:56:48,411 | INFO | Training on poisoned data...
+2026-03-24 04:57:52,853 | INFO | Poisoned Model Test Accuracy: 0.7924
+2026-03-24 04:57:52,853 | INFO | Evaluating Attack Success Rate (ASR)...
+2026-03-24 04:57:52,894 | INFO |  Attack Success Rate:0.37056737588652483)
+2026-03-24 04:57:52,894 | INFO | ****************************************************************************************************

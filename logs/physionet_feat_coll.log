@@ -1,0 +1,19 @@
+2026-03-25 04:48:18,334 | INFO | log_path:logs/physionet_feat_coll.log
+2026-03-25 04:48:18,335 | INFO | data_dir:data/PhysioNetProcessed
+2026-03-25 04:48:18,335 | INFO | target_class:0
+2026-03-25 04:48:18,335 | INFO | device:cuda:0
+2026-03-25 04:48:18,335 | INFO | epochs:100
+2026-03-25 04:48:18,335 | INFO | trigger_strength:0.8
+2026-03-25 04:48:18,335 | INFO | poison_rate:0.2
+2026-03-25 04:48:18,335 | INFO | attack_type:feature_collision
+2026-03-25 04:48:18,343 | INFO | starting model cnn
+2026-03-25 04:48:34,379 | INFO | Clean accuracy of cnn=0.9075757575757576
+2026-03-25 04:54:12,445 | INFO | creating poisoned dataset
+2026-03-25 04:56:31,981 | INFO | Training on poisoned data...
+2026-03-25 04:56:46,570 | INFO | Poisoned Model Test Accuracy: 0.9303
+2026-03-25 04:56:46,570 | INFO | Evaluating Attack Success Rate (ASR)...
+2026-03-25 04:56:46,589 | INFO |  Attack Success Rate:0.16312056737588654)
+2026-03-25 04:56:46,589 | INFO | ****************************************************************************************************
+2026-03-25 04:56:46,589 | INFO | starting model lstm
+2026-03-25 04:58:16,535 | INFO | Clean accuracy of lstm=0.15
+q
