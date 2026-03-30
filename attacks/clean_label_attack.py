@@ -212,7 +212,7 @@ class FeatureCollisionAttack(CleanLabelAttack):
         Returns:
             perturbation: Optimized perturbation
         """
-        self.model.eval()
+        self.model.train()
         
         # Initialize perturbation
         delta = torch.zeros_like(torch.FloatTensor(x)).to(self.device)
@@ -228,6 +228,8 @@ class FeatureCollisionAttack(CleanLabelAttack):
             # Get features of perturbed sample
             x_perturbed = x_tensor + delta.unsqueeze(0)
             features = self.model.get_features(x_perturbed)
+            # features = features.detach()
+            # features.requires_grad=True
             
             # Feature collision loss
             loss = torch.nn.functional.mse_loss(features[0], target_features)

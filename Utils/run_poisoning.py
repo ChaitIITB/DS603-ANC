@@ -18,8 +18,8 @@ import argparse
 import logging
 
 parser=argparse.ArgumentParser()
-parser.add_argument('--log-path', default='physionet_poisoning.log')
-parser.add_argument('--data-dir', default='data/PhysioNetProcessed')
+parser.add_argument('--log-path', default='test_scripts/test.log')
+parser.add_argument('--data-dir', required=True)
 parser.add_argument('--target-class', default=0, type=int)
 parser.add_argument('--device', default='cuda:0')
 parser.add_argument('--epochs', default=80, type=int)
@@ -33,9 +33,6 @@ args=parser.parse_args()
 if os.path.exists(args.log_path):
     os.remove(args.log_path)
 
-if os.path.exists(args.log_path):
-    os.remove(args.log_path)
-
 logging.basicConfig(
     handlers=[
         logging.StreamHandler(),
@@ -45,11 +42,11 @@ logging.basicConfig(
     format='%(asctime)s | %(levelname)s | %(message)s'
 )
 
-PROCESSED_DATA_DIR=args.data_dir
-warnings.warn(f'{PROCESSED_DATA_DIR} should be obtained running load_<dataset>.py from load_data')
-
 for key, val in args.__dict__.items():
     logging.info(f'{key}:{val}')
+
+PROCESSED_DATA_DIR=args.data_dir
+warnings.warn(f'{PROCESSED_DATA_DIR} should be obtained running load_<dataset>.py from load_data')
 
 try:
     X_train=np.load(os.path.join(PROCESSED_DATA_DIR, 'X_train.npy'))
@@ -78,7 +75,8 @@ test_loader=DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
 
 models=args.models
 
-for model_arch in models:
+for model_arch in models:    
+    logging.info('*'*100)
     logging.info(f'starting model {model_arch}')
     model=get_model(model_arch, input_size=X_train.shape[1], n_channels=1, n_classes=len(np.unique(y_train)))
     model=model.to(device)
@@ -147,4 +145,3 @@ for model_arch in models:
     )
     
     logging.info(f" Attack Success Rate:{asr})")
-    logging.info('*'*100)
