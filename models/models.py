@@ -79,11 +79,11 @@ class LinearModel(nn.Module):
         """Extract features before the final classification layer."""
         x = x.view(x.size(0), -1)
         x = self.fc1(x)
-        x = self.bn1(x)
+        # x = self.bn1(x)
         x = F.relu(x)
         x = self.dropout1(x)
         x = self.fc2(x)
-        x = self.bn2(x)
+        # x = self.bn2(x)
         x = F.relu(x)
         return x
 
@@ -189,94 +189,174 @@ class CNNModel(nn.Module):
         return x
 
 
+# class LSTMModel(nn.Module):
+#     """
+#     LSTM model for time-series classification.
+    
+#     Architecture:
+#         LSTM -> FC -> ReLU -> Dropout -> FC
+#     """
+    
+#     def __init__(self, input_size, n_channels, n_classes, 
+#                  hidden_dim=128, n_layers=2, dropout=0.3, bidirectional=True):
+#         super(LSTMModel, self).__init__()
+        
+#         self.hidden_dim = hidden_dim
+#         self.n_layers = n_layers
+#         self.bidirectional = bidirectional
+#         self.n_directions = 2 if bidirectional else 1
+        
+#         self.lstm = nn.LSTM(
+#             input_size=n_channels,
+#             hidden_size=hidden_dim,
+#             num_layers=n_layers,
+#             batch_first=True,
+#             dropout=dropout if n_layers > 1 else 0,
+#             bidirectional=bidirectional
+#         )
+        
+#         lstm_output_dim = hidden_dim * self.n_directions
+        
+#         self.fc1 = nn.Linear(lstm_output_dim, 128)
+#         self.dropout = nn.Dropout(dropout)
+#         self.fc2 = nn.Linear(128, n_classes)
+        
+#     def forward(self, x):
+#         """
+#         Args:
+#             x: Input tensor of shape (batch, seq_len, n_channels)
+#         Returns:
+#             Output tensor of shape (batch, n_classes)
+#         """
+#         # LSTM output: (batch, seq_len, hidden_dim * n_directions)
+#         lstm_out, _ = self.lstm(x)
+        
+#         # last timestep representation
+#         x = lstm_out[:, -1, :]
+        
+#         x = self.fc1(x)
+#         x = F.relu(x)
+#         x = self.dropout(x)
+#         x = self.fc2(x)
+        
+#         return x
+    
+#     def get_features(self, x):
+#         """Extract features before the final classification layer."""
+#         lstm_out, _ = self.lstm(x)
+        
+#         # same fix here
+#         x = lstm_out[:, -1, :]
+        
+#         x = self.fc1(x)
+#         x = F.relu(x)
+#         return x
+
+
+# def count_parameters(model):
+#     """Count the number of trainable parameters in a model."""
+#     if isinstance(model, nn.Module):
+#         return sum(p.numel() for p in model.parameters() if p.requires_grad)
+#     elif isinstance(model, SklearnModelWrapper):
+#         return model.count_parameters()
+#     else:
+#         return 0
+
 class LSTMModel(nn.Module):
     """
-    LSTM model for time-series classification.
-    
-    Architecture:
-        LSTM -> FC -> ReLU -> Dropout -> FC
+    Deep LSTM model for time-series classification.
+
+    Keeps same interface as before.
     """
-    
+
     def __init__(self, input_size, n_channels, n_classes, 
                  hidden_dim=128, n_layers=2, dropout=0.3, bidirectional=True):
-        """
-        Args:
-            input_size: Sequence length (time steps) - not used directly
-            n_channels: Number of input channels (input features per timestep)
-            n_classes: Number of output classes
-            hidden_dim: LSTM hidden dimension
-            n_layers: Number of LSTM layers
-            dropout: Dropout probability
-            bidirectional: Whether to use bidirectional LSTM
-        """
         super(LSTMModel, self).__init__()
-        
-        self.hidden_dim = hidden_dim
-        self.n_layers = n_layers
-        self.bidirectional = bidirectional
-        self.n_directions = 2 if bidirectional else 1
-        
-        self.lstm = nn.LSTM(
-            input_size=n_channels,
-            hidden_size=hidden_dim,
-            num_layers=n_layers,
-            batch_first=True,
-            dropout=dropout if n_layers > 1 else 0,
-            bidirectional=bidirectional
-        )
-        
-        lstm_output_dim = hidden_dim * self.n_directions
-        
-        self.fc1 = nn.Linear(lstm_output_dim, 128)
-        self.dropout = nn.Dropout(dropout)
+
+        self.lstm1 = nn.LSTM(n_channels, 64, batch_first=True)
+        self.bn1 = nn.BatchNorm1d(64)
+        self.drop1 = nn.Dropout(0.2)
+
+        self.lstm2 = nn.LSTM(64, 512, batch_first=True)
+        self.bn2 = nn.BatchNorm1d(512)
+        self.drop2 = nn.Dropout(0.2)
+
+        self.lstm3 = nn.LSTM(512, 256, batch_first=True)
+        self.bn3 = nn.BatchNorm1d(256)
+        self.drop3 = nn.Dropout(0.2)
+
+        self.lstm4 = nn.LSTM(256, 128, batch_first=True)
+        self.bn4 = nn.BatchNorm1d(128)
+        self.drop4 = nn.Dropout(0.2)
+
+        self.lstm5 = nn.LSTM(128, 64, batch_first=True)
+
+        self.fc1 = nn.Linear(64, 128)
         self.fc2 = nn.Linear(128, n_classes)
-        
+
     def forward(self, x):
         """
-        Args:
-            x: Input tensor of shape (batch, seq_len, n_channels)
-        Returns:
-            Output tensor of shape (batch, n_classes)
+        x: (batch, seq_len, n_channels)
         """
-        # LSTM output: (batch, seq_len, hidden_dim * n_directions)
-        lstm_out, (h_n, c_n) = self.lstm(x)
-        
-        # Use the last timestep output
-        # For bidirectional, concatenate the last output from both directions
-        if self.bidirectional:
-            # h_n shape: (n_layers * n_directions, batch, hidden_dim)
-            # Get last layer outputs from both directions
-            h_forward = h_n[-2]  # Last layer, forward direction
-            h_backward = h_n[-1]  # Last layer, backward direction
-            x = torch.cat([h_forward, h_backward], dim=1)
-        else:
-            x = h_n[-1]  # Last layer hidden state
-        
-        x = self.fc1(x)
-        x = F.relu(x)
-        x = self.dropout(x)
+
+        x, _ = self.lstm1(x)
+        x = self._apply_bn(x, self.bn1)
+        x = self.drop1(x)
+
+        x, _ = self.lstm2(x)
+        x = self._apply_bn(x, self.bn2)
+        x = self.drop2(x)
+
+        x, _ = self.lstm3(x)
+        x = self._apply_bn(x, self.bn3)
+        x = self.drop3(x)
+
+        x, _ = self.lstm4(x)
+        x = self._apply_bn(x, self.bn4)
+        x = self.drop4(x)
+
+        x, _ = self.lstm5(x)
+
+        x = x[:, -1, :]  
+
+        x = F.relu(self.fc1(x))
         x = self.fc2(x)
-        
-        return x
-    
+
+        return x  
+
     def get_features(self, x):
-        """Extract features before the final classification layer."""
-        lstm_out, (h_n, c_n) = self.lstm(x)
-        
-        if self.bidirectional:
-            h_forward = h_n[-2]
-            h_backward = h_n[-1]
-            x = torch.cat([h_forward, h_backward], dim=1)
-        else:
-            x = h_n[-1]
-        
-        x = self.fc1(x)
-        x = F.relu(x)
+        x, _ = self.lstm1(x)
+        x = self._apply_bn(x, self.bn1)
+        x = self.drop1(x)
+
+        x, _ = self.lstm2(x)
+        x = self._apply_bn(x, self.bn2)
+        x = self.drop2(x)
+
+        x, _ = self.lstm3(x)
+        x = self._apply_bn(x, self.bn3)
+        x = self.drop3(x)
+
+        x, _ = self.lstm4(x)
+        x = self._apply_bn(x, self.bn4)
+        x = self.drop4(x)
+
+        x, _ = self.lstm5(x)
+
+        x = x[:, -1, :]  
+        x = F.relu(self.fc1(x))
+
+        return x  
+
+    def _apply_bn(self, x, bn_layer):
+        batch, seq, feat = x.size()
+        x = x.contiguous().view(-1, feat) 
+        x = bn_layer(x)
+        x = x.view(batch, seq, feat)
         return x
 
 
 def count_parameters(model):
-    """Count the number of trainable parameters in a model."""
     if isinstance(model, nn.Module):
         return sum(p.numel() for p in model.parameters() if p.requires_grad)
     elif isinstance(model, SklearnModelWrapper):
@@ -332,6 +412,30 @@ class BiLSTMModel(nn.Module):
         x = F.relu(self.fc1(x))
         x = self.fc2(x)
 
+        return x  
+
+    def get_features(self, x):
+        x, _ = self.lstm1(x)
+        x = self._apply_bn(x, self.bn1)
+        x = self.drop1(x)
+
+        x, _ = self.lstm2(x)
+        x = self._apply_bn(x, self.bn2)
+        x = self.drop2(x)
+
+        x, _ = self.lstm3(x)
+        x = self._apply_bn(x, self.bn3)
+        x = self.drop3(x)
+
+        x, _ = self.lstm4(x)
+        x = self._apply_bn(x, self.bn4)
+        x = self.drop4(x)
+
+        x, (hn, _) = self.lstm5(x)
+
+        x = x[:, -1, :]  
+        x = F.relu(self.fc1(x))
+        
         return x  
 
     def _apply_bn(self, x, bn_layer):
