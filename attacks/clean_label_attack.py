@@ -14,8 +14,197 @@ Clean-label attacks are more stealthy because:
 import numpy as np
 import torch
 from tqdm import tqdm
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+# --------------------------------------------------
+# Small surrogate model
+# --------------------------------------------------
+class SmallFreqCNN(nn.Module):
+    def __init__(self, n_channels, n_classes):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Conv1d(n_channels, 1024, kernel_size=5, padding=2),
+            nn.ReLU(),
+            nn.Conv1d(1024, 512, kernel_size=5, padding=2),
+            nn.ReLU(),
+            nn.AdaptiveAvgPool1d(1),
+            nn.Flatten(),
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Linear(128, 64),
+            nn.ReLU()
+        )
+        self.fc = nn.Linear(64, n_classes)
+
+    def forward(self, x):
+        x = x.permute(0, 2, 1)  # (B, C, F)
+        x = self.net(x)
+        x = x.squeeze(-1)
+        return self.fc(x)
 
 
+# --------------------------------------------------
+# Main Attack Class (API-compatible)
+# --------------------------------------------------
+class FreqDomainAttack:
+    def __init__(self, model, eps_per_channel,
+                 target_class=0, trigger_strength=0.2,
+                 device='cuda', top_percent=10):
+
+        self.model = model  # kept for API consistency (unused)
+        self.eps_per_channel = torch.tensor(eps_per_channel, device=device)
+        self.target_class = target_class
+        self.trigger_strength = trigger_strength
+        self.device = device
+        self.top_percent = top_percent
+
+        self.surrogate = None
+        self.importance_matrix = None
+        self.mask = None
+
+    # --------------------------------------------------
+    # Train surrogate + compute importance
+    # --------------------------------------------------
+    def _fit_importance(self, X, y, epochs=5, batch_size=256):
+        X = torch.tensor(X, dtype=torch.float32, device=self.device)
+        y = torch.tensor(y, dtype=torch.long, device=self.device)
+
+        # FFT → magnitude
+        X_f = torch.fft.rfft(X, dim=1)
+        X_f = torch.abs(X_f)
+
+        dataset = torch.utils.data.TensorDataset(X_f, y)
+        loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
+
+        n_channels = X_f.shape[2]
+        n_classes = len(torch.unique(y))
+
+        self.surrogate = SmallFreqCNN(n_channels, n_classes).to(self.device)
+        optimizer = torch.optim.Adam(self.surrogate.parameters(), lr=1e-3)
+
+        # Train
+        self.surrogate.train()
+        for i in range(epochs):
+            for xb, yb in loader:
+                logits = self.surrogate(xb)
+                loss = F.cross_entropy(logits, yb)
+
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+            print(f'{loss} at {i+1}th epoch')
+
+        # -----------------------------
+        # Gradient-based importance
+        # -----------------------------
+        X_f.requires_grad_(True)
+        self.surrogate.eval()
+
+        logits = self.surrogate(X_f)
+        loss = F.cross_entropy(logits, y)
+        loss.backward()
+
+        grads = X_f.grad
+        importance = grads.abs().mean(dim=0)
+
+        importance = importance / (importance.max() + 1e-8)
+        self.importance_matrix = importance.detach()
+
+        # Build mask
+        threshold = torch.quantile(
+            importance.flatten(),
+            1 - self.top_percent / 100.0
+        )
+        self.mask = importance >= threshold
+
+    # --------------------------------------------------
+    # Apply trigger (frequency domain)
+    # --------------------------------------------------
+    def apply_trigger(self, x):
+        x = torch.tensor(x, dtype=torch.float32, device=self.device)
+
+        X_f = torch.fft.rfft(x, dim=0)
+
+        mag = torch.abs(X_f)
+        phase = torch.angle(X_f)
+
+        mag = torch.where(
+            self.mask,
+            mag * (1 + self.trigger_strength),
+            mag
+        )
+
+        X_f_new = mag * torch.exp(1j * phase)
+        x_triggered = torch.fft.irfft(X_f_new, dim=0)
+
+        perturbation = torch.clamp(
+            x_triggered - x,
+            -self.eps_per_channel,
+            self.eps_per_channel
+        )
+
+        return (x + perturbation).detach().cpu().numpy()
+
+    # --------------------------------------------------
+    # Poison dataset (same API)
+    # --------------------------------------------------
+    def create_poisoned_dataset(self, X, y, poison_rate=0.1,
+                               target_samples_only=True):
+
+        # Compute importance ONCE
+        if self.mask is None:
+            print("Computing frequency-domain importance...")
+            self._fit_importance(X, y, epochs=160)
+
+        X_poisoned = X.copy()
+        y_poisoned = y.copy()
+        poison_mask = np.zeros(len(X), dtype=bool)
+
+        if target_samples_only:
+            target_indices = np.where(y == self.target_class)[0]
+        else:
+            target_indices = np.arange(len(X))
+
+        n_poison = max(1, int(len(target_indices) * poison_rate))
+        poison_indices = np.random.choice(target_indices, n_poison, replace=False)
+
+        print(f"Creating poisoned dataset (FreqDomainAttack):")
+        print(f"  Target class: {self.target_class}")
+        print(f"  Poisoned samples: {n_poison}")
+
+        for idx in poison_indices:
+            X_poisoned[idx] = self.apply_trigger(X[idx])
+            poison_mask[idx] = True
+
+        return X_poisoned, y_poisoned, poison_mask
+
+    # --------------------------------------------------
+    # Triggered test set (same API)
+    # --------------------------------------------------
+    def create_triggered_test_set(self, X, y, source_classes=None):
+
+        if source_classes is None:
+            source_classes = [c for c in np.unique(y) if c != self.target_class]
+
+        source_mask = np.isin(y, source_classes)
+        source_indices = np.where(source_mask)[0]
+
+        X_triggered = X.copy()
+
+        for idx in source_indices:
+            X_triggered[idx] = self.apply_trigger(X[idx])
+
+        print(f"Created triggered test set (FreqDomainAttack):")
+        print(f"  Triggered samples: {len(source_indices)}")
+
+        return X_triggered, y, source_mask
+
+# does not particularly work well for black box attacks 
 class CleanLabelAttack:
     """
     Clean-label backdoor attack using feature importance.

@@ -1,6 +1,7 @@
 from .clean_label_attack import (
     CleanLabelAttack, 
     FeatureCollisionAttack,
+    FreqDomainAttack,
     calculate_attack_success_rate,
     calculate_clean_accuracy
 )
@@ -21,6 +22,7 @@ __all__ = [
     'FeatureCollisionAttack',
     'calculate_attack_success_rate',
     'calculate_clean_accuracy',
+    'FreqDomainAttack',
     # Linear/Sklearn model attacks
     'CleanLabelLinearAttack',
     'GradientBasedLinearAttack',

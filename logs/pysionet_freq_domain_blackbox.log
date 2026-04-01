@@ -1,0 +1,43 @@
+2026-04-01 05:16:50,128 | INFO | log_path:logs/pysionet_freq_domain_blackbox.log
+2026-04-01 05:16:50,128 | INFO | data_dir:data/PhysioNetProcessed
+2026-04-01 05:16:50,128 | INFO | target_class:0
+2026-04-01 05:16:50,128 | INFO | device:cuda:0
+2026-04-01 05:16:50,128 | INFO | epochs:350
+2026-04-01 05:16:50,128 | INFO | trigger_strength:1.0
+2026-04-01 05:16:50,128 | INFO | batch_size:1024
+2026-04-01 05:16:50,128 | INFO | models:['linear', 'cnn', 'lstm', 'bilstm']
+2026-04-01 05:16:50,128 | INFO | poison_rate:0.7
+2026-04-01 05:16:50,128 | INFO | attack:freq_domain
+2026-04-01 05:16:50,128 | INFO | surr_model:None
+2026-04-01 05:16:50,136 | INFO | ****************************************************************************************************
+2026-04-01 05:16:50,136 | INFO | starting model linear
+2026-04-01 05:16:56,904 | INFO | Clean accuracy of linear=0.8469696969696969
+2026-04-01 05:16:56,904 | INFO | creating poisoned dataset
+2026-04-01 05:17:12,682 | INFO | Training on poisoned data...
+2026-04-01 05:17:18,291 | INFO | Poisoned Model Test Accuracy: 0.8227
+2026-04-01 05:17:18,291 | INFO | Evaluating Attack Success Rate (ASR)...
+2026-04-01 05:17:18,389 | INFO |  Attack Success Rate:0.21453900709219859)
+2026-04-01 05:17:18,389 | INFO | ****************************************************************************************************
+2026-04-01 05:17:18,389 | INFO | starting model cnn
+2026-04-01 05:17:30,266 | INFO | Clean accuracy of cnn=0.7454545454545455
+2026-04-01 05:17:30,266 | INFO | creating poisoned dataset
+2026-04-01 05:17:45,841 | INFO | Training on poisoned data...
+2026-04-01 05:17:57,701 | INFO | Poisoned Model Test Accuracy: 0.7258
+2026-04-01 05:17:57,701 | INFO | Evaluating Attack Success Rate (ASR)...
+2026-04-01 05:17:57,800 | INFO |  Attack Success Rate:0.39184397163120566)
+2026-04-01 05:17:57,800 | INFO | ****************************************************************************************************
+2026-04-01 05:17:57,800 | INFO | starting model lstm
+2026-04-01 05:19:56,696 | INFO | Clean accuracy of lstm=0.45151515151515154
+2026-04-01 05:19:56,696 | INFO | creating poisoned dataset
+2026-04-01 05:20:12,480 | INFO | Training on poisoned data...
+2026-04-01 05:22:11,685 | INFO | Poisoned Model Test Accuracy: 0.4303
+2026-04-01 05:22:11,685 | INFO | Evaluating Attack Success Rate (ASR)...
+2026-04-01 05:22:11,798 | INFO |  Attack Success Rate:0.48404255319148937)
+2026-04-01 05:22:11,798 | INFO | ****************************************************************************************************
+2026-04-01 05:22:11,798 | INFO | starting model bilstm
+2026-04-01 05:26:19,240 | INFO | Clean accuracy of bilstm=0.6545454545454545
+2026-04-01 05:26:19,240 | INFO | creating poisoned dataset
+2026-04-01 05:26:35,076 | INFO | Training on poisoned data...
+2026-04-01 05:30:42,779 | INFO | Poisoned Model Test Accuracy: 0.5030
+2026-04-01 05:30:42,779 | INFO | Evaluating Attack Success Rate (ASR)...
+2026-04-01 05:30:42,910 | INFO |  Attack Success Rate:0.36879432624113473)
