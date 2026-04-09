@@ -15,6 +15,7 @@ def compute_eps_per_channel(X_train:np.ndarray, k=0.4, verbose=True):
     n_channels = X_train.shape[-1]
     X_flat = X_train.reshape(-1, n_channels)
     channel_std = X_flat.std(axis=0)
+    print(f'channel std = {channel_std}')
     eps_per_channel = k * channel_std
     
     if verbose:
