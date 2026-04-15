@@ -60,7 +60,7 @@ class LinearModel(nn.Module):
             Output tensor of shape (batch, n_classes)
         """
         # Flatten the input
-        x = x.view(x.size(0), -1)
+        x = x.reshape(x.size(0), -1)
         
         x = self.fc1(x)
         x = self.bn1(x)
