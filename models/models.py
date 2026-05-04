@@ -77,7 +77,7 @@ class LinearModel(nn.Module):
     
     def get_features(self, x):
         """Extract features before the final classification layer."""
-        x = x.view(x.size(0), -1)
+        x = x.reshape(x.size(0), -1)
         x = self.fc1(x)
         # x = self.bn1(x)
         x = F.relu(x)
@@ -187,80 +187,6 @@ class CNNModel(nn.Module):
         x = self.fc1(x)
         x = F.relu(x)
         return x
-
-
-# class LSTMModel(nn.Module):
-#     """
-#     LSTM model for time-series classification.
-    
-#     Architecture:
-#         LSTM -> FC -> ReLU -> Dropout -> FC
-#     """
-    
-#     def __init__(self, input_size, n_channels, n_classes, 
-#                  hidden_dim=128, n_layers=2, dropout=0.3, bidirectional=True):
-#         super(LSTMModel, self).__init__()
-        
-#         self.hidden_dim = hidden_dim
-#         self.n_layers = n_layers
-#         self.bidirectional = bidirectional
-#         self.n_directions = 2 if bidirectional else 1
-        
-#         self.lstm = nn.LSTM(
-#             input_size=n_channels,
-#             hidden_size=hidden_dim,
-#             num_layers=n_layers,
-#             batch_first=True,
-#             dropout=dropout if n_layers > 1 else 0,
-#             bidirectional=bidirectional
-#         )
-        
-#         lstm_output_dim = hidden_dim * self.n_directions
-        
-#         self.fc1 = nn.Linear(lstm_output_dim, 128)
-#         self.dropout = nn.Dropout(dropout)
-#         self.fc2 = nn.Linear(128, n_classes)
-        
-#     def forward(self, x):
-#         """
-#         Args:
-#             x: Input tensor of shape (batch, seq_len, n_channels)
-#         Returns:
-#             Output tensor of shape (batch, n_classes)
-#         """
-#         # LSTM output: (batch, seq_len, hidden_dim * n_directions)
-#         lstm_out, _ = self.lstm(x)
-        
-#         # last timestep representation
-#         x = lstm_out[:, -1, :]
-        
-#         x = self.fc1(x)
-#         x = F.relu(x)
-#         x = self.dropout(x)
-#         x = self.fc2(x)
-        
-#         return x
-    
-#     def get_features(self, x):
-#         """Extract features before the final classification layer."""
-#         lstm_out, _ = self.lstm(x)
-        
-#         # same fix here
-#         x = lstm_out[:, -1, :]
-        
-#         x = self.fc1(x)
-#         x = F.relu(x)
-#         return x
-
-
-# def count_parameters(model):
-#     """Count the number of trainable parameters in a model."""
-#     if isinstance(model, nn.Module):
-#         return sum(p.numel() for p in model.parameters() if p.requires_grad)
-#     elif isinstance(model, SklearnModelWrapper):
-#         return model.count_parameters()
-#     else:
-#         return 0
 
 class LSTMModel(nn.Module):
     """
