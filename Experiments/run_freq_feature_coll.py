@@ -42,7 +42,7 @@ sys.path.insert(0, project_dir)
 
 from models.models import get_model, count_parameters
 from attacks import (          # <-- your new attack file
-    WhiteBoxFreqFeatureCollisionAttack,
+    FreqPGDCollisionAttack,
     calculate_attack_success_rate,
     calculate_clean_accuracy,
 )
@@ -169,11 +169,11 @@ def train_model(model, train_loader, val_loader, device, epochs=50, lr=0.001):
 # Attack config — tweak here without touching run_experiment
 # ------------------------------------------------------------------
 ATTACK_CFG = dict(
-    trigger_strength = 0.2,
-    top_percent      = 10,
-    n_steps          = 500,
-    step_size        = 0.01,
-    input_reg_weight = 0.05,
+    trigger_strength  = 0.2,
+    top_percent       = 10,
+    surrogate_epochs  = 20,
+    n_trigger_steps   = 500,
+    trigger_step_size = 0.01,
 )
 
 def run_experiment(dataset_name, data, model_types, device, results_dir,
@@ -200,12 +200,12 @@ def run_experiment(dataset_name, data, model_types, device, results_dir,
     train_loader = DataLoader(
         TensorDataset(torch.FloatTensor(data['X_train']),
                       torch.LongTensor(data['y_train'])),
-        batch_size=64, shuffle=True,
+        batch_size=256, shuffle=True,
     )
     test_loader = DataLoader(
         TensorDataset(torch.FloatTensor(data['X_test']),
                       torch.LongTensor(data['y_test'])),
-        batch_size=64, shuffle=False,
+        batch_size=256, shuffle=False,
     )
 
     for model_type in model_types:
@@ -233,9 +233,8 @@ def run_experiment(dataset_name, data, model_types, device, results_dir,
         print(f"Clean Test Accuracy: {clean_acc:.4f}")
 
         # ---- 2. White-box frequency feature-collision attack ----------
-        print("\n[2/3] Building white-box freq-domain feature collision attack...")
-        attack = WhiteBoxFreqFeatureCollisionAttack(
-            model            = model,
+        print("\n[2/3] Building freq-domain feature collision attack...")
+        attack = FreqPGDCollisionAttack(
             eps_per_channel  = data['eps_per_channel'],
             target_class     = target_class,
             trigger_strength = ATTACK_CFG['trigger_strength'],
@@ -246,16 +245,16 @@ def run_experiment(dataset_name, data, model_types, device, results_dir,
         # _fit_importance runs one forward+backward on the CLEAN model
         # create_poisoned_dataset calls it automatically if mask is None,
         # but we call it explicitly here so timing is logged separately.
-        attack._fit_importance(data['X_train'], data['y_train'])
+        # attack._fit_importance(data['X_train'], data['y_train'])
 
         X_poisoned, y_poisoned, poison_mask = attack.create_poisoned_dataset(
             data['X_train'],
             data['y_train'],
-            poison_rate      = poison_rate,
-            target_samples_only = False,       # poison non-target samples
-            n_steps          = ATTACK_CFG['n_steps'],
-            step_size        = ATTACK_CFG['step_size'],
-            input_reg_weight = ATTACK_CFG['input_reg_weight'],
+            poison_rate       = poison_rate,
+            target_samples_only = True,
+            surrogate_epochs  = ATTACK_CFG['surrogate_epochs'],
+            n_trigger_steps   = ATTACK_CFG['n_trigger_steps'],
+            trigger_step_size = ATTACK_CFG['trigger_step_size'],
         )
 
         # ---- 3. Train poisoned model ----------------------------------
@@ -267,7 +266,7 @@ def run_experiment(dataset_name, data, model_types, device, results_dir,
         poisoned_loader = DataLoader(
             TensorDataset(torch.FloatTensor(X_poisoned),
                           torch.LongTensor(y_poisoned)),
-            batch_size=64, shuffle=True,
+            batch_size=256, shuffle=True,
         )
 
         poisoned_acc = train_model(
@@ -328,7 +327,7 @@ def main():
 
     config = {
         'epochs':       30,
-        'poison_rate':  0.4,
+        'poison_rate':  0.1,
         'target_class': 0,
     }
 

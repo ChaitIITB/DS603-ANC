@@ -47,227 +47,306 @@ class SmallFreqCNN(nn.Module):
         x = x.squeeze(-1)
         return self.fc(x)
     
-class WhiteBoxFreqFeatureCollisionAttack:
+    def get_features(self, x):
+        x = x.transpose(1, 2)
+        return self.net(x)       # (N, 64)
+    
+
+class FreqPGDCollisionAttack:
     """
-    White-box clean-label backdoor attack via feature collision in frequency domain.
-    Uses the model's own get_features() method — no hooks needed.
+    Clean-label backdoor attack combining:
+      1. Surrogate model trained on FFT magnitudes (= FreqDomainAttack surrogate)
+      2. PGD feature-collision to find an OPTIMIZED frequency trigger
+         (instead of the fixed magnitude-boost trigger)
+      3. Apply that optimized trigger to target-class training samples
+      4. Train target model on poisoned data → backdoor embedded
+
+    At test time: stamp the same PGD-optimized trigger → misclassified as target.
     """
 
     def __init__(
         self,
-        model: nn.Module,
         eps_per_channel,
         target_class: int = 0,
         trigger_strength: float = 0.2,
         top_percent: float = 10,
         device: str = "cuda",
     ):
-        self.model = model.to(device)
-        self.eps_per_channel = torch.tensor(
+        self.eps_per_channel  = torch.tensor(
             eps_per_channel, dtype=torch.float32, device=device
         )
-        self.target_class = target_class
+        self.target_class     = target_class
         self.trigger_strength = trigger_strength
-        self.top_percent = top_percent
-        self.device = device
+        self.top_percent      = top_percent
+        self.device           = device
 
-        self.importance_matrix = None
-        self.mask = None
-
-    # ------------------------------------------------------------------
-    # Feature extraction via get_features()
-    # ------------------------------------------------------------------
-
-    def _get_features(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        x: (N, seq_len, n_channels) — calls model.get_features() directly.
-        No hooks, no layer name strings.
-        """
-        self.model.eval()
-        return self.model.get_features(x)
+        self.surrogate        = None   # SmallFreqCNN
+        self.mask             = None   # important freq-bin mask
+        self.trigger_delta    = None   # optimized frequency perturbation (freq_bins, n_ch)
 
     # ------------------------------------------------------------------
-    # Importance: gradient of feature norm w.r.t. frequency magnitudes
+    # Step 1: Train surrogate + build importance mask
     # ------------------------------------------------------------------
 
-    def _fit_importance(self, X: np.ndarray, y: np.ndarray):
+    def _fit_surrogate(self, X: np.ndarray, y: np.ndarray,
+                       epochs: int = 20, batch_size: int = 256):
         """
-        One forward+backward through the TARGET model in frequency space.
-
-        We reconstruct a zero-phase time-domain signal from FFT magnitudes,
-        push it through get_features(), and take gradients w.r.t. magnitudes
-        to identify which frequency bins matter most.
+        Train SmallFreqCNN on FFT magnitudes, then compute gradient-based
+        importance mask — identical to FreqDomainAttack._fit_importance.
         """
-        print("[WhiteBoxFreqCollision] Computing frequency importance via get_features()...")
+        print("[FreqPGDCollision] Training surrogate on FFT magnitudes...")
 
         X_t = torch.tensor(X, dtype=torch.float32, device=self.device)
         y_t = torch.tensor(y, dtype=torch.long,    device=self.device)
 
         # FFT magnitude: (N, freq_bins, n_channels)
-        X_f   = torch.fft.rfft(X_t, dim=1)
-        X_mag = torch.abs(X_f)
-        X_mag.requires_grad_(True)
+        X_f = torch.abs(torch.fft.rfft(X_t, dim=1))
 
-        self.model.eval()
+        loader = torch.utils.data.DataLoader(
+            torch.utils.data.TensorDataset(X_f, y_t),
+            batch_size=batch_size, shuffle=True,
+        )
 
-        # Zero-phase reconstruction so the model sees its expected input format
-        X_recon = torch.fft.irfft(X_mag, n=X_t.shape[1], dim=1)  # (N, seq_len, n_ch)
+        n_channels = X_f.shape[2]
+        n_classes  = len(torch.unique(y_t))
+        self.surrogate = SmallFreqCNN(n_channels, n_classes).to(self.device)
+        opt = torch.optim.Adam(self.surrogate.parameters(), lr=1e-3)
 
-        # Use get_features() + cross-entropy on a linear probe over feature norm
-        # (avoids needing the classification head to be differentiable w.r.t. X_mag)
-        features = self._get_features(X_recon)                    # (N, feat_dim)
-        logits   = self.model(X_recon)
-        loss     = nn.functional.cross_entropy(logits, y_t)
+        self.surrogate.train()
+        for epoch in range(epochs):
+            for xb, yb in loader:
+                logits = self.surrogate(xb)
+                loss   = F.cross_entropy(logits, yb)
+                opt.zero_grad()
+                loss.backward()
+                opt.step()
+            if (epoch + 1) % 5 == 0:
+                print(f"  Epoch {epoch+1}/{epochs} — loss: {loss.item():.4f}")
+
+        # --- gradient-based importance (same as FreqDomainAttack) ---
+        print("[FreqPGDCollision] Computing importance mask...")
+        X_f_grad = X_f.detach().requires_grad_(True)
+        self.surrogate.eval()
+        loss = F.cross_entropy(self.surrogate(X_f_grad), y_t)
         loss.backward()
 
-        # Gradient magnitude averaged over samples → (freq_bins, n_channels)
-        grads      = X_mag.grad
-        importance = grads.abs().mean(dim=0)
+        importance = X_f_grad.grad.abs().mean(dim=0)   # (freq_bins, n_ch)
         importance = importance / (importance.max() + 1e-8)
 
-        self.importance_matrix = importance.detach()
-
         threshold  = torch.quantile(importance.flatten(), 1.0 - self.top_percent / 100.0)
-        self.mask  = importance >= threshold
+        self.mask  = (importance >= threshold).detach()
 
-        print(f"  Done. Mask covers {self.mask.sum().item()} / "
-              f"{self.mask.numel()} freq-channel bins.")
+        print(f"  Mask covers {self.mask.sum().item()} / {self.mask.numel()} bins.")
 
     # ------------------------------------------------------------------
-    # Fixed trigger (test-time)
+    # Step 2: PGD feature-collision to find universal trigger
+    # ------------------------------------------------------------------
+
+    def _optimize_trigger(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        n_steps: int = 500,
+        step_size: float = 0.01,
+        n_anchor_samples: int = 64,
+        batch_size: int = 64,
+    ):
+        """
+        Find a universal frequency-domain trigger δ_freq such that:
+
+            φ_surrogate(iRFFT(mag_base * (1 + δ))) ≈ φ_surrogate(target_anchor)
+
+        averaged over many base samples from non-target classes.
+
+        δ_freq is constrained so the time-domain perturbation
+        stays within ±eps_per_channel.
+
+        Only the masked (important) frequency bins are optimised;
+        the rest are held at zero.
+        """
+        print("[FreqPGDCollision] Optimizing universal frequency trigger via PGD...")
+
+        self.surrogate.eval()
+        X_t = torch.tensor(X, dtype=torch.float32, device=self.device)
+        y_t = torch.tensor(y, dtype=torch.long,    device=self.device)
+
+        # --- target anchor: mean surrogate features of target-class samples ---
+        target_idx = np.where(y == self.target_class)[0]
+        anchor_idx = np.random.choice(
+            target_idx,
+            min(n_anchor_samples, len(target_idx)),
+            replace=False,
+        )
+        X_target = X_t[anchor_idx]                             # (K, seq_len, n_ch)
+        X_target_f = torch.abs(torch.fft.rfft(X_target, dim=1))
+
+        with torch.no_grad():
+            phi_target = self.surrogate.get_features(X_target_f).mean(dim=0, keepdim=True)
+            # (1, feat_dim)
+
+        # --- source samples: non-target class ---
+        source_idx = np.where(y != self.target_class)[0]
+        chosen_src = np.random.choice(
+            source_idx,
+            min(n_anchor_samples, len(source_idx)),
+            replace=False,
+        )
+        X_source = X_t[chosen_src]                             # (M, seq_len, n_ch)
+
+        seq_len  = X_source.shape[1]
+
+        # FFT of source samples
+        X_src_f   = torch.fft.rfft(X_source, dim=1)           # (M, freq_bins, n_ch)
+        X_src_mag = torch.abs(X_src_f).detach()
+        X_src_mag_safe = X_src_mag.clamp(min=1e-6)
+        X_src_phase = torch.angle(X_src_f).detach()
+
+        # --- universal δ (freq_bins, n_ch), only non-zero on mask ---
+        # Initialise with small magnitude-boost on masked bins
+        delta = torch.where(
+            self.mask,
+            torch.full_like(X_src_mag[0], self.trigger_strength),
+            torch.zeros_like(X_src_mag[0]),
+        ).detach().requires_grad_(True)                        # (freq_bins, n_ch)
+
+        lr = step_size
+        best_loss   = float('inf')
+        best_delta  = delta.detach().clone()
+
+        for step in range(n_steps):
+            # Process source samples in mini-batches to save memory
+            total_loss = torch.tensor(0.0, device=self.device)
+            n_mini = 0
+
+            for mb_start in range(0, len(X_source), batch_size):
+                mb_mag   = X_src_mag_safe[mb_start:mb_start + batch_size]   # (b, freq_bins, n_ch)
+                mb_phase = X_src_phase[mb_start:mb_start + batch_size]
+
+                # Apply universal delta (broadcast over batch)
+                mag_perturbed = mb_mag * (1.0 + delta.unsqueeze(0))         # (b, freq_bins, n_ch)
+
+                # Clamp to keep mag positive
+                mag_perturbed = mag_perturbed.clamp(min=0.0)
+
+                # Reconstruct time-domain
+                X_f_new = mag_perturbed * torch.exp(1j * mb_phase)
+                x_recon = torch.fft.irfft(X_f_new, n=seq_len, dim=1)       # (b, seq_len, n_ch)
+
+                if torch.isnan(x_recon).any():
+                    continue
+
+                phi_p = self.surrogate.get_features(
+                    torch.abs(torch.fft.rfft(x_recon, dim=1))
+                )                                                            # (b, feat_dim)
+
+                # Collision loss: MSE to target anchor features
+                loss_mb = F.mse_loss(
+                    phi_p,
+                    phi_target.expand(phi_p.shape[0], -1),
+                )
+
+                total_loss = total_loss + loss_mb
+                n_mini += 1
+
+            if n_mini == 0:
+                continue
+
+            total_loss = total_loss / n_mini
+
+            if delta.grad is not None:
+                delta.grad.zero_()
+
+            total_loss.backward()
+
+            if delta.grad is None or torch.isnan(delta.grad).any():
+                lr *= 0.5
+                delta = delta.detach().requires_grad_(True)
+                continue
+
+            if step % 100 == 0:
+                print(f"  step {step:4d} | collision_loss={total_loss.item():.6f}")
+
+            # Track best
+            if total_loss.item() < best_loss:
+                best_loss  = total_loss.item()
+                best_delta = delta.detach().clone()
+
+            with torch.no_grad():
+                # Sign-gradient step, masked (don't touch unimportant bins)
+                grad_sign = delta.grad.sign()
+                grad_sign = torch.where(self.mask, grad_sign, torch.zeros_like(grad_sign))
+                delta -= lr * grad_sign
+
+                # ℓ∞ projection: enforce time-domain budget per channel
+                # Approximate: reconstruct with mean source mag and check
+                mean_mag   = X_src_mag_safe.mean(dim=0)                    # (freq_bins, n_ch)
+                mag_proj   = mean_mag * (1.0 + delta)
+                X_f_proj   = mag_proj * torch.exp(1j * X_src_phase.mean(dim=0))
+                x_proj     = torch.fft.irfft(X_f_proj, n=seq_len, dim=0)  # (seq_len, n_ch) - mean
+
+                # Per-channel max perturbation
+                mean_src   = torch.fft.irfft(
+                    mean_mag * torch.exp(1j * X_src_phase.mean(dim=0)),
+                    n=seq_len, dim=0,
+                )
+                pert       = x_proj - mean_src
+                excess     = pert.abs() - self.eps_per_channel.unsqueeze(0)  # (seq_len, n_ch)
+                overshoot  = excess.clamp(min=0).max()
+
+                if overshoot > 0:
+                    # Scale delta down proportionally
+                    delta = delta * (self.eps_per_channel.unsqueeze(0).max() /
+                                     (self.eps_per_channel.unsqueeze(0).max() + overshoot))
+
+                # Keep delta bounded: mag*(1+delta) must stay positive
+                delta = delta.clamp(min=-0.99, max=10.0)
+
+                # Zero out unmasked bins
+                delta = torch.where(self.mask, delta, torch.zeros_like(delta))
+
+            delta = delta.detach().requires_grad_(True)
+
+        print(f"  Best collision loss: {best_loss:.6f}")
+        self.trigger_delta = best_delta.detach()
+
+    # ------------------------------------------------------------------
+    # Apply the optimized trigger to a sample
     # ------------------------------------------------------------------
 
     def apply_trigger(self, x: np.ndarray) -> np.ndarray:
         """
-        Boost important frequency-bin magnitudes in a single sample.
+        Stamp the PGD-optimized frequency trigger onto a single sample.
         x: (seq_len, n_channels)
         """
-        x_t   = torch.tensor(x, dtype=torch.float32, device=self.device)
-        X_f   = torch.fft.rfft(x_t, dim=0)
-        mag   = torch.abs(X_f)
+        x_t     = torch.tensor(x, dtype=torch.float32, device=self.device)
+        seq_len = x_t.shape[0]
+
+        X_f   = torch.fft.rfft(x_t, dim=0)                    # (freq_bins, n_ch)
+        mag   = torch.abs(X_f).clamp(min=1e-6)
         phase = torch.angle(X_f)
 
-        mag_triggered = torch.where(
-            self.mask,
-            mag * (1.0 + self.trigger_strength),
-            mag,
-        )
+        # Apply learned delta
+        mag_triggered = mag * (1.0 + self.trigger_delta)
+        mag_triggered = mag_triggered.clamp(min=0.0)
+        mag_triggered = torch.nan_to_num(mag_triggered, nan=0.0, posinf=0.0)
 
         X_f_new     = mag_triggered * torch.exp(1j * phase)
-        x_triggered = torch.fft.irfft(X_f_new, n=x_t.shape[0], dim=0)
+        x_triggered = torch.fft.irfft(X_f_new, n=seq_len, dim=0)
 
         perturbation = torch.clamp(
             x_triggered - x_t,
             -self.eps_per_channel,
              self.eps_per_channel,
         )
-        return (x_t + perturbation).detach().cpu().numpy()
+        result = x_t + perturbation
+
+        if torch.isnan(result).any() or torch.isinf(result).any():
+            return x
+
+        return result.detach().cpu().numpy()
 
     # ------------------------------------------------------------------
-    # Core: per-sample feature collision optimisation
-    # ------------------------------------------------------------------
-
-    def compute_poison_sample(
-        self,
-        base_sample: np.ndarray,
-        target_sample: np.ndarray,
-        n_steps: int = 500,
-        step_size: float = 0.01,
-        decay: float = 1.0,
-        feature_loss_weight: float = 1.0,
-        input_reg_weight: float = 0.05,
-        verbose: bool = False,
-    ) -> np.ndarray:
-        """
-        Optimise δ_freq so that get_features(iRFFT(mag*(1+δ))) ≈ get_features(target).
-
-        Constraint: ||iRFFT(δ_freq) - base||_∞ ≤ eps_per_channel (per channel).
-        """
-        self.model.eval()
-        seq_len = base_sample.shape[0]
-
-        # Target features — fixed, no grad
-        t_tensor = (
-            torch.tensor(target_sample, dtype=torch.float32)
-            .unsqueeze(0).to(self.device)
-        )
-        with torch.no_grad():
-            phi_target = self._get_features(t_tensor).detach()
-
-        # Base in frequency space
-        base_t     = torch.tensor(base_sample, dtype=torch.float32, device=self.device)
-        base_freq  = torch.fft.rfft(base_t, dim=0)
-        base_mag   = torch.abs(base_freq)
-        base_phase = torch.angle(base_freq)          # held constant throughout
-
-        # Initialise δ with the trigger boost on important bins
-        delta_init = torch.where(
-            self.mask,
-            torch.full_like(base_mag, self.trigger_strength),
-            torch.zeros_like(base_mag),
-        )
-        delta = delta_init.clone().requires_grad_(True)
-
-        base_input = base_t.unsqueeze(0)
-        lr = step_size
-
-        for step in range(n_steps):
-            if delta.grad is not None:
-                delta.grad.zero_()
-
-            # Reconstruct time-domain from perturbed magnitude
-            mag_perturbed = base_mag * (1.0 + delta)
-            X_f_new       = mag_perturbed * torch.exp(1j * base_phase)
-            x_recon       = torch.fft.irfft(X_f_new, n=seq_len, dim=0)   # (seq_len, n_ch)
-            x_recon_batch = x_recon.unsqueeze(0)                          # (1, seq_len, n_ch)
-
-            phi_p = self._get_features(x_recon_batch)
-
-            loss_feat = feature_loss_weight * torch.mean((phi_p - phi_target) ** 2)
-            loss_reg  = input_reg_weight    * torch.mean((x_recon_batch - base_input) ** 2)
-            loss      = loss_feat + loss_reg
-            loss.backward()
-
-            if verbose and step % 100 == 0:
-                print(f"    step {step:4d} | feat={loss_feat.item():.6f} "
-                      f"| reg={loss_reg.item():.6f}")
-
-            with torch.no_grad():
-                delta -= lr * delta.grad.sign()
-
-                # Project: enforce ℓ∞ budget in time domain, back-project to δ
-                mag_proj  = base_mag * (1.0 + delta)
-                X_f_proj  = mag_proj * torch.exp(1j * base_phase)
-                x_proj    = torch.fft.irfft(X_f_proj, n=seq_len, dim=0)
-
-                excess    = (x_proj - base_t) - torch.clamp(
-                    x_proj - base_t,
-                    -self.eps_per_channel,
-                     self.eps_per_channel,
-                )
-                excess_f  = torch.fft.rfft(excess, dim=0)
-                delta     = delta - (torch.abs(excess_f) / (base_mag + 1e-8)).detach()
-
-            delta = delta.detach().requires_grad_(True)
-            lr   *= decay
-
-        # Final reconstruction
-        with torch.no_grad():
-            mag_final = base_mag * (1.0 + delta)
-            X_f_final = mag_final * torch.exp(1j * base_phase)
-            x_final   = torch.fft.irfft(X_f_final, n=seq_len, dim=0)
-
-            perturbation = torch.clamp(
-                x_final - base_t,
-                -self.eps_per_channel,
-                 self.eps_per_channel,
-            )
-            poison = (base_t + perturbation).cpu().numpy()
-
-        return poison
-
-    # ------------------------------------------------------------------
-    # Dataset-level poisoning
+    # Create poisoned dataset (= FreqDomainAttack.create_poisoned_dataset)
     # ------------------------------------------------------------------
 
     def create_poisoned_dataset(
@@ -275,66 +354,78 @@ class WhiteBoxFreqFeatureCollisionAttack:
         X: np.ndarray,
         y: np.ndarray,
         poison_rate: float = 0.1,
-        target_samples_only: bool = False,
-        n_steps: int = 500,
-        step_size: float = 0.01,
-        input_reg_weight: float = 0.05,
-        verbose: bool = False,
+        target_samples_only: bool = True,
+        surrogate_epochs: int = 20,
+        n_trigger_steps: int = 500,
+        trigger_step_size: float = 0.01,
     ):
-        if self.mask is None:
-            self._fit_importance(X, y)
+        """
+        Full pipeline:
+          1. Train surrogate + build mask  (once)
+          2. Optimize universal trigger    (once)
+          3. Stamp trigger on selected samples (same as FreqDomainAttack)
+        """
+        # Step 1 + 2: fit surrogate and optimise trigger if not done yet
+        if self.surrogate is None:
+            self._fit_surrogate(X, y, epochs=surrogate_epochs)
+
+        if self.trigger_delta is None:
+            self._optimize_trigger(
+                X, y,
+                n_steps=n_trigger_steps,
+                step_size=trigger_step_size,
+            )
 
         X_poisoned  = X.copy()
         y_poisoned  = y.copy()
         poison_mask = np.zeros(len(X), dtype=bool)
 
-        # For feature collision: poison NON-target samples (clean label kept)
-        source_idx = (np.where(y == self.target_class)[0]
-                      if target_samples_only
-                      else np.where(y != self.target_class)[0])
-        target_idx = np.where(y == self.target_class)[0]
+        # Same selection logic as FreqDomainAttack
+        if target_samples_only:
+            candidate_indices = np.where(y == self.target_class)[0]
+        else:
+            candidate_indices = np.arange(len(X))
 
-        n_poison = max(1, int(len(source_idx) * poison_rate))
-        chosen   = np.random.choice(source_idx, n_poison, replace=False)
+        n_poison       = max(1, int(len(candidate_indices) * poison_rate))
+        poison_indices = np.random.choice(candidate_indices, n_poison, replace=False)
 
-        print(f"\n[WhiteBoxFreqCollision] Poisoning {n_poison} samples "
-              f"(rate={poison_rate}, target_class={self.target_class})")
+        print(f"[FreqPGDCollision] Stamping trigger on {n_poison} samples "
+              f"(rate={poison_rate}, target_class={self.target_class}, "
+              f"target_only={target_samples_only})")
 
-        for i, idx in enumerate(chosen):
-            anchor_idx = np.random.choice(target_idx)
-            if verbose:
-                print(f"  [{i+1}/{n_poison}] src_label={y[idx]} anchor={anchor_idx}")
+        for idx in tqdm(poison_indices, desc="Poisoning"):
+            triggered = self.apply_trigger(X[idx])
+            if not np.isnan(triggered).any():
+                X_poisoned[idx] = triggered
+                poison_mask[idx] = True
+            else:
+                print(f"  WARNING: nan for idx={idx} — keeping clean")
 
-            X_poisoned[idx] = self.compute_poison_sample(
-                base_sample      = X[idx],
-                target_sample    = X[anchor_idx],
-                n_steps          = n_steps,
-                step_size        = step_size,
-                input_reg_weight = input_reg_weight,
-                verbose          = verbose,
-            )
-            poison_mask[idx] = True
-
-        print(f"[WhiteBoxFreqCollision] Done. {poison_mask.sum()} / {len(X)} poisoned.\n")
+        print(f"[FreqPGDCollision] Done. {poison_mask.sum()} / {len(X)} poisoned.")
         return X_poisoned, y_poisoned, poison_mask
 
     # ------------------------------------------------------------------
-    # Test-time trigger
+    # Test-time triggered set (identical API to FreqDomainAttack)
     # ------------------------------------------------------------------
 
-    def create_triggered_test_set(self, X, y, source_classes=None):
+    def create_triggered_test_set(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        source_classes=None,
+    ):
         if source_classes is None:
             source_classes = [c for c in np.unique(y) if c != self.target_class]
 
         source_mask = np.isin(y, source_classes)
         X_triggered = X.copy()
-        for idx in np.where(source_mask)[0]:
+
+        for idx in tqdm(np.where(source_mask)[0], desc="Triggering test set"):
             X_triggered[idx] = self.apply_trigger(X[idx])
 
-        print(f"[WhiteBoxFreqCollision] Triggered test set: "
+        print(f"[FreqPGDCollision] Triggered test set: "
               f"{source_mask.sum()} samples from {source_classes}")
-        return X_triggered, y, source_mask
-    
+        return X_triggered, y, source_mask 
 # --------------------------------------------------
 # Main Attack Class (API-compatible)
 # --------------------------------------------------

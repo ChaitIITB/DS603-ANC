@@ -4,7 +4,7 @@ from .clean_label_attack import (
     FreqDomainAttack,
     calculate_attack_success_rate,
     calculate_clean_accuracy,
-    WhiteBoxFreqFeatureCollisionAttack
+    FreqPGDCollisionAttack
 )
 
 from .linear_attacks import (
@@ -32,5 +32,5 @@ __all__ = [
     'calculate_attack_success_rate_sklearn',
     'calculate_clean_accuracy_sklearn',
     'get_attack_for_model',
-    'WhiteBoxFreqFeatureCollisionAttack'
+    'FreqPGDCollisionAttack'
 ]
