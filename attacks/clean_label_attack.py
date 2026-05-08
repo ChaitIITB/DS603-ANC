@@ -50,382 +50,7 @@ class SmallFreqCNN(nn.Module):
     def get_features(self, x):
         x = x.transpose(1, 2)
         return self.net(x)       # (N, 64)
-    
-
-class FreqPGDCollisionAttack:
-    """
-    Clean-label backdoor attack combining:
-      1. Surrogate model trained on FFT magnitudes (= FreqDomainAttack surrogate)
-      2. PGD feature-collision to find an OPTIMIZED frequency trigger
-         (instead of the fixed magnitude-boost trigger)
-      3. Apply that optimized trigger to target-class training samples
-      4. Train target model on poisoned data → backdoor embedded
-
-    At test time: stamp the same PGD-optimized trigger → misclassified as target.
-    """
-
-    def __init__(
-        self,
-        eps_per_channel,
-        target_class: int = 0,
-        trigger_strength: float = 0.2,
-        top_percent: float = 10,
-        device: str = "cuda",
-    ):
-        self.eps_per_channel  = torch.tensor(
-            eps_per_channel, dtype=torch.float32, device=device
-        )
-        self.target_class     = target_class
-        self.trigger_strength = trigger_strength
-        self.top_percent      = top_percent
-        self.device           = device
-
-        self.surrogate        = None   # SmallFreqCNN
-        self.mask             = None   # important freq-bin mask
-        self.trigger_delta    = None   # optimized frequency perturbation (freq_bins, n_ch)
-
-    # ------------------------------------------------------------------
-    # Step 1: Train surrogate + build importance mask
-    # ------------------------------------------------------------------
-
-    def _fit_surrogate(self, X: np.ndarray, y: np.ndarray,
-                       epochs: int = 20, batch_size: int = 256):
-        """
-        Train SmallFreqCNN on FFT magnitudes, then compute gradient-based
-        importance mask — identical to FreqDomainAttack._fit_importance.
-        """
-        print("[FreqPGDCollision] Training surrogate on FFT magnitudes...")
-
-        X_t = torch.tensor(X, dtype=torch.float32, device=self.device)
-        y_t = torch.tensor(y, dtype=torch.long,    device=self.device)
-
-        # FFT magnitude: (N, freq_bins, n_channels)
-        X_f = torch.abs(torch.fft.rfft(X_t, dim=1))
-
-        loader = torch.utils.data.DataLoader(
-            torch.utils.data.TensorDataset(X_f, y_t),
-            batch_size=batch_size, shuffle=True,
-        )
-
-        n_channels = X_f.shape[2]
-        n_classes  = len(torch.unique(y_t))
-        self.surrogate = SmallFreqCNN(n_channels, n_classes).to(self.device)
-        opt = torch.optim.Adam(self.surrogate.parameters(), lr=1e-3)
-
-        self.surrogate.train()
-        for epoch in range(epochs):
-            for xb, yb in loader:
-                logits = self.surrogate(xb)
-                loss   = F.cross_entropy(logits, yb)
-                opt.zero_grad()
-                loss.backward()
-                opt.step()
-            if (epoch + 1) % 5 == 0:
-                print(f"  Epoch {epoch+1}/{epochs} — loss: {loss.item():.4f}")
-
-        # --- gradient-based importance (same as FreqDomainAttack) ---
-        print("[FreqPGDCollision] Computing importance mask...")
-        X_f_grad = X_f.detach().requires_grad_(True)
-        self.surrogate.eval()
-        loss = F.cross_entropy(self.surrogate(X_f_grad), y_t)
-        loss.backward()
-
-        importance = X_f_grad.grad.abs().mean(dim=0)   # (freq_bins, n_ch)
-        importance = importance / (importance.max() + 1e-8)
-
-        threshold  = torch.quantile(importance.flatten(), 1.0 - self.top_percent / 100.0)
-        self.mask  = (importance >= threshold).detach()
-
-        print(f"  Mask covers {self.mask.sum().item()} / {self.mask.numel()} bins.")
-
-    # ------------------------------------------------------------------
-    # Step 2: PGD feature-collision to find universal trigger
-    # ------------------------------------------------------------------
-
-    def _optimize_trigger(
-        self,
-        X: np.ndarray,
-        y: np.ndarray,
-        n_steps: int = 500,
-        step_size: float = 0.01,
-        n_anchor_samples: int = 64,
-        batch_size: int = 64,
-    ):
-        """
-        Find a universal frequency-domain trigger δ_freq such that:
-
-            φ_surrogate(iRFFT(mag_base * (1 + δ))) ≈ φ_surrogate(target_anchor)
-
-        averaged over many base samples from non-target classes.
-
-        δ_freq is constrained so the time-domain perturbation
-        stays within ±eps_per_channel.
-
-        Only the masked (important) frequency bins are optimised;
-        the rest are held at zero.
-        """
-        print("[FreqPGDCollision] Optimizing universal frequency trigger via PGD...")
-
-        self.surrogate.eval()
-        X_t = torch.tensor(X, dtype=torch.float32, device=self.device)
-        y_t = torch.tensor(y, dtype=torch.long,    device=self.device)
-
-        # --- target anchor: mean surrogate features of target-class samples ---
-        target_idx = np.where(y == self.target_class)[0]
-        anchor_idx = np.random.choice(
-            target_idx,
-            min(n_anchor_samples, len(target_idx)),
-            replace=False,
-        )
-        X_target = X_t[anchor_idx]                             # (K, seq_len, n_ch)
-        X_target_f = torch.abs(torch.fft.rfft(X_target, dim=1))
-
-        with torch.no_grad():
-            phi_target = self.surrogate.get_features(X_target_f).mean(dim=0, keepdim=True)
-            # (1, feat_dim)
-
-        # --- source samples: non-target class ---
-        source_idx = np.where(y != self.target_class)[0]
-        chosen_src = np.random.choice(
-            source_idx,
-            min(n_anchor_samples, len(source_idx)),
-            replace=False,
-        )
-        X_source = X_t[chosen_src]                             # (M, seq_len, n_ch)
-
-        seq_len  = X_source.shape[1]
-
-        # FFT of source samples
-        X_src_f   = torch.fft.rfft(X_source, dim=1)           # (M, freq_bins, n_ch)
-        X_src_mag = torch.abs(X_src_f).detach()
-        X_src_mag_safe = X_src_mag.clamp(min=1e-6)
-        X_src_phase = torch.angle(X_src_f).detach()
-
-        # --- universal δ (freq_bins, n_ch), only non-zero on mask ---
-        # Initialise with small magnitude-boost on masked bins
-        delta = torch.where(
-            self.mask,
-            torch.full_like(X_src_mag[0], self.trigger_strength),
-            torch.zeros_like(X_src_mag[0]),
-        ).detach().requires_grad_(True)                        # (freq_bins, n_ch)
-
-        lr = step_size
-        best_loss   = float('inf')
-        best_delta  = delta.detach().clone()
-
-        for step in range(n_steps):
-            # Process source samples in mini-batches to save memory
-            total_loss = torch.tensor(0.0, device=self.device)
-            n_mini = 0
-
-            for mb_start in range(0, len(X_source), batch_size):
-                mb_mag   = X_src_mag_safe[mb_start:mb_start + batch_size]   # (b, freq_bins, n_ch)
-                mb_phase = X_src_phase[mb_start:mb_start + batch_size]
-
-                # Apply universal delta (broadcast over batch)
-                mag_perturbed = mb_mag * (1.0 + delta.unsqueeze(0))         # (b, freq_bins, n_ch)
-
-                # Clamp to keep mag positive
-                mag_perturbed = mag_perturbed.clamp(min=0.0)
-
-                # Reconstruct time-domain
-                X_f_new = mag_perturbed * torch.exp(1j * mb_phase)
-                x_recon = torch.fft.irfft(X_f_new, n=seq_len, dim=1)       # (b, seq_len, n_ch)
-
-                if torch.isnan(x_recon).any():
-                    continue
-
-                phi_p = self.surrogate.get_features(
-                    torch.abs(torch.fft.rfft(x_recon, dim=1))
-                )                                                            # (b, feat_dim)
-
-                # Collision loss: MSE to target anchor features
-                loss_mb = F.mse_loss(
-                    phi_p,
-                    phi_target.expand(phi_p.shape[0], -1),
-                )
-
-                total_loss = total_loss + loss_mb
-                n_mini += 1
-
-            if n_mini == 0:
-                continue
-
-            total_loss = total_loss / n_mini
-
-            if delta.grad is not None:
-                delta.grad.zero_()
-
-            total_loss.backward()
-
-            if delta.grad is None or torch.isnan(delta.grad).any():
-                lr *= 0.5
-                delta = delta.detach().requires_grad_(True)
-                continue
-
-            if step % 100 == 0:
-                print(f"  step {step:4d} | collision_loss={total_loss.item():.6f}")
-
-            # Track best
-            if total_loss.item() < best_loss:
-                best_loss  = total_loss.item()
-                best_delta = delta.detach().clone()
-
-            with torch.no_grad():
-                # Sign-gradient step, masked (don't touch unimportant bins)
-                grad_sign = delta.grad.sign()
-                grad_sign = torch.where(self.mask, grad_sign, torch.zeros_like(grad_sign))
-                delta -= lr * grad_sign
-
-                # ℓ∞ projection: enforce time-domain budget per channel
-                # Approximate: reconstruct with mean source mag and check
-                mean_mag   = X_src_mag_safe.mean(dim=0)                    # (freq_bins, n_ch)
-                mag_proj   = mean_mag * (1.0 + delta)
-                X_f_proj   = mag_proj * torch.exp(1j * X_src_phase.mean(dim=0))
-                x_proj     = torch.fft.irfft(X_f_proj, n=seq_len, dim=0)  # (seq_len, n_ch) - mean
-
-                # Per-channel max perturbation
-                mean_src   = torch.fft.irfft(
-                    mean_mag * torch.exp(1j * X_src_phase.mean(dim=0)),
-                    n=seq_len, dim=0,
-                )
-                pert       = x_proj - mean_src
-                excess     = pert.abs() - self.eps_per_channel.unsqueeze(0)  # (seq_len, n_ch)
-                overshoot  = excess.clamp(min=0).max()
-
-                if overshoot > 0:
-                    # Scale delta down proportionally
-                    delta = delta * (self.eps_per_channel.unsqueeze(0).max() /
-                                     (self.eps_per_channel.unsqueeze(0).max() + overshoot))
-
-                # Keep delta bounded: mag*(1+delta) must stay positive
-                delta = delta.clamp(min=-0.99, max=10.0)
-
-                # Zero out unmasked bins
-                delta = torch.where(self.mask, delta, torch.zeros_like(delta))
-
-            delta = delta.detach().requires_grad_(True)
-
-        print(f"  Best collision loss: {best_loss:.6f}")
-        self.trigger_delta = best_delta.detach()
-
-    # ------------------------------------------------------------------
-    # Apply the optimized trigger to a sample
-    # ------------------------------------------------------------------
-
-    def apply_trigger(self, x: np.ndarray) -> np.ndarray:
-        """
-        Stamp the PGD-optimized frequency trigger onto a single sample.
-        x: (seq_len, n_channels)
-        """
-        x_t     = torch.tensor(x, dtype=torch.float32, device=self.device)
-        seq_len = x_t.shape[0]
-
-        X_f   = torch.fft.rfft(x_t, dim=0)                    # (freq_bins, n_ch)
-        mag   = torch.abs(X_f).clamp(min=1e-6)
-        phase = torch.angle(X_f)
-
-        # Apply learned delta
-        mag_triggered = mag * (1.0 + self.trigger_delta)
-        mag_triggered = mag_triggered.clamp(min=0.0)
-        mag_triggered = torch.nan_to_num(mag_triggered, nan=0.0, posinf=0.0)
-
-        X_f_new     = mag_triggered * torch.exp(1j * phase)
-        x_triggered = torch.fft.irfft(X_f_new, n=seq_len, dim=0)
-
-        perturbation = torch.clamp(
-            x_triggered - x_t,
-            -self.eps_per_channel,
-             self.eps_per_channel,
-        )
-        result = x_t + perturbation
-
-        if torch.isnan(result).any() or torch.isinf(result).any():
-            return x
-
-        return result.detach().cpu().numpy()
-
-    # ------------------------------------------------------------------
-    # Create poisoned dataset (= FreqDomainAttack.create_poisoned_dataset)
-    # ------------------------------------------------------------------
-
-    def create_poisoned_dataset(
-        self,
-        X: np.ndarray,
-        y: np.ndarray,
-        poison_rate: float = 0.1,
-        target_samples_only: bool = True,
-        surrogate_epochs: int = 20,
-        n_trigger_steps: int = 500,
-        trigger_step_size: float = 0.01,
-    ):
-        """
-        Full pipeline:
-          1. Train surrogate + build mask  (once)
-          2. Optimize universal trigger    (once)
-          3. Stamp trigger on selected samples (same as FreqDomainAttack)
-        """
-        # Step 1 + 2: fit surrogate and optimise trigger if not done yet
-        if self.surrogate is None:
-            self._fit_surrogate(X, y, epochs=surrogate_epochs)
-
-        if self.trigger_delta is None:
-            self._optimize_trigger(
-                X, y,
-                n_steps=n_trigger_steps,
-                step_size=trigger_step_size,
-            )
-
-        X_poisoned  = X.copy()
-        y_poisoned  = y.copy()
-        poison_mask = np.zeros(len(X), dtype=bool)
-
-        # Same selection logic as FreqDomainAttack
-        if target_samples_only:
-            candidate_indices = np.where(y == self.target_class)[0]
-        else:
-            candidate_indices = np.arange(len(X))
-
-        n_poison       = max(1, int(len(candidate_indices) * poison_rate))
-        poison_indices = np.random.choice(candidate_indices, n_poison, replace=False)
-
-        print(f"[FreqPGDCollision] Stamping trigger on {n_poison} samples "
-              f"(rate={poison_rate}, target_class={self.target_class}, "
-              f"target_only={target_samples_only})")
-
-        for idx in tqdm(poison_indices, desc="Poisoning"):
-            triggered = self.apply_trigger(X[idx])
-            if not np.isnan(triggered).any():
-                X_poisoned[idx] = triggered
-                poison_mask[idx] = True
-            else:
-                print(f"  WARNING: nan for idx={idx} — keeping clean")
-
-        print(f"[FreqPGDCollision] Done. {poison_mask.sum()} / {len(X)} poisoned.")
-        return X_poisoned, y_poisoned, poison_mask
-
-    # ------------------------------------------------------------------
-    # Test-time triggered set (identical API to FreqDomainAttack)
-    # ------------------------------------------------------------------
-
-    def create_triggered_test_set(
-        self,
-        X: np.ndarray,
-        y: np.ndarray,
-        source_classes=None,
-    ):
-        if source_classes is None:
-            source_classes = [c for c in np.unique(y) if c != self.target_class]
-
-        source_mask = np.isin(y, source_classes)
-        X_triggered = X.copy()
-
-        for idx in tqdm(np.where(source_mask)[0], desc="Triggering test set"):
-            X_triggered[idx] = self.apply_trigger(X[idx])
-
-        print(f"[FreqPGDCollision] Triggered test set: "
-              f"{source_mask.sum()} samples from {source_classes}")
-        return X_triggered, y, source_mask 
+   
 # --------------------------------------------------
 # Main Attack Class (API-compatible)
 # --------------------------------------------------
@@ -581,6 +206,133 @@ class FreqDomainAttack:
         print(f"  Triggered samples: {len(source_indices)}")
 
         return X_triggered, y, source_mask
+
+class PGDFreqFeatureCollisionAttack(FreqDomainAttack):
+    """
+    Clean-label feature-collision poisoner in the frequency domain.
+    - Train surrogate on FFT magnitudes
+    - Optimize a frequency-domain perturbation with PGD
+    - Reconstruct poisoned time-domain samples with inverse FFT
+    """
+
+    def __init__(self, model, eps_per_channel,
+                 target_class=0, trigger_strength=0.2,
+                 device='cuda', top_percent=10,
+                 n_iters=40, step_size=0.01, reg_weight=0.0):
+        super().__init__(model, eps_per_channel, target_class,
+                         trigger_strength, device, top_percent)
+        self.n_iters = n_iters
+        self.step_size = step_size
+        self.reg_weight = reg_weight
+
+    def _get_target_features(self, X_target):
+        """
+        Compute mean target feature representation on FFT magnitudes.
+        """
+        self.surrogate.eval()
+        with torch.no_grad():
+            X_target = torch.tensor(X_target, dtype=torch.float32, device=self.device)
+            Xf = torch.fft.rfft(X_target, dim=1)          # (N, F, C), complex
+            Xmag = torch.abs(Xf)                          # real-valued magnitude
+            feats = self.surrogate.get_features(Xmag)
+            return feats.mean(dim=0).detach()
+
+    def optimize_poison(self, x, target_features, mask=None):
+        """
+        PGD in frequency domain.
+
+        We optimize delta on the magnitude spectrum:
+            mag_pert = clamp(mag + delta, min=0)
+        and keep the original phase fixed.
+        """
+        self.surrogate.eval()
+
+        x = torch.tensor(x, dtype=torch.float32, device=self.device)  # (T, C)
+        Xf = torch.fft.rfft(x, dim=0)                                  # (F, C), complex
+        mag = torch.abs(Xf).detach()
+        phase = torch.angle(Xf).detach()
+
+        delta = torch.zeros_like(mag, requires_grad=True)
+
+        eps = torch.tensor(self.eps_per_channel, dtype=torch.float32, device=self.device)
+        eps = eps.view(1, -1)  # broadcast over frequency bins
+
+        if mask is not None:
+            mask_t = torch.tensor(mask, dtype=torch.float32, device=self.device)
+        else:
+            mask_t = None
+
+        for _ in range(self.n_iters):
+            # PGD forward pass
+            mag_pert = torch.clamp(mag + delta, min=0.0)
+            Xf_pert = mag_pert.unsqueeze(0)  # (1, F, C)
+
+            feats = self.surrogate.get_features(Xf_pert)
+            loss = F.mse_loss(feats[0], target_features)
+
+            # Optional regularization to keep perturbation small/smooth
+            if self.reg_weight > 0:
+                loss = loss + self.reg_weight * delta.pow(2).mean()
+
+            loss.backward()
+
+            with torch.no_grad():
+                # Projected gradient descent step (minimization)
+                delta -= self.step_size * delta.grad.sign()
+
+                # Project onto per-channel epsilon ball
+                delta.clamp_(-eps, eps)
+
+                # Optional importance mask
+                if mask_t is not None:
+                    delta.mul_(mask_t)
+
+            delta.grad = None
+
+        # Build poisoned frequency sample
+        mag_pert = torch.clamp(mag + delta, min=0.0)
+        Xf_new = mag_pert * torch.exp(1j * phase)
+
+        # Inverse FFT back to time domain
+        x_poison = torch.fft.irfft(Xf_new, n=x.shape[0], dim=0)
+
+        return x_poison.detach().cpu().numpy()
+
+    def create_poisoned_dataset(self, X, y, poison_rate=0.1):
+        """
+        Poison target-class samples using PGD-optimized frequency perturbations.
+        """
+        if self.mask is None:
+            print("Computing frequency-domain importance / training surrogate...")
+            self._fit_importance(X, y, epochs=160)
+
+        X_poisoned = X.copy()
+        y_poisoned = y.copy()
+        poison_mask = np.zeros(len(X), dtype=bool)
+
+        target_indices = np.where(y == self.target_class)[0]
+        X_target = X[target_indices]
+
+        target_features = self._get_target_features(X_target)
+
+        # importance mask from surrogate gradients
+        importance = self.importance_matrix / (self.importance_matrix.max() + 1e-8)
+        threshold = np.percentile(importance.flatten().cpu(), 70)
+        mask = (importance >= threshold).astype(np.float32)
+
+        n_poison = max(1, int(len(target_indices) * poison_rate))
+        poison_indices = np.random.choice(target_indices, n_poison, replace=False)
+
+        print("Creating poisoned dataset (PGD frequency-domain feature collision):")
+        print(f"  Target class: {self.target_class}")
+        print(f"  Poisoned samples: {n_poison}")
+
+        for idx in tqdm(poison_indices):
+            pert = self.optimize_poison(X[idx], target_features, mask=mask)
+            X_poisoned[idx] = pert
+            poison_mask[idx] = True
+
+        return X_poisoned, y_poisoned, poison_mask
 
 # does not particularly work well for black box attacks 
 class CleanLabelAttack:
