@@ -1,0 +1,25 @@
+Running attacks at ε=5 and ε=10 …
+  IForest … done
+  LOF … done
+  DBSCAN … done
+ε-sweep …
+
+=================================================================
+  DETECTION RATE SUMMARY
+=================================================================
+  Attack                        IForest         LOF      DBSCAN
+  ---------------------------------------------------------
+  Baseline                        0.642       0.627       0.642
+  Grad→IForest ε=5                0.388       0.627       0.627
+  Grad→IForest ε=10               0.373       0.627       0.627
+  Grad→LOF ε=5                    0.463       0.597       0.537
+  Grad→LOF ε=10                   0.343       0.418       0.463
+  Grad→DBSCAN ε=5                 0.433       0.597       0.493
+  Grad→DBSCAN ε=10                0.299       0.478       0.284
+=================================================================
+
+  Main figure saved.
+  ε=5 vs ε=10 comparison figure saved.
+  Signal overlay figure saved.
+
+All done.

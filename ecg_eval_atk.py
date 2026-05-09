@@ -1,13 +1,3 @@
-"""
-Clean-Label Poisoning: Evading K-Means Anomaly Detection on ECG200
-===================================================================
-Goal: Perturb anomalous ECG samples (class -1) so they fall inside
-      the normal cluster, evading distance-based K-Means detection —
-      while keeping perturbations imperceptibly small (bounded by ε).
-
-Attack: Centroid Projection with ε-budget constraint
-"""
-
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
@@ -80,11 +70,8 @@ X_normal = X[normal_mask]
 X_anom   = X[anom_mask]
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# 2. BASELINE K-MEANS ANOMALY DETECTOR
-# ══════════════════════════════════════════════════════════════════════════════
 print("\n" + "─" * 60)
-print("STEP 2 – Fitting baseline K-Means (k=2) anomaly detector")
+print("STEP 2 - Fitting baseline K-Means (k=2) anomaly detector")
 print("─" * 60)
 
 scaler  = StandardScaler()
@@ -104,7 +91,6 @@ print(f"  Normal cluster id : {normal_cluster}  "
       f"(contains {max(c0_normal,c1_normal)} normals)")
 print(f"  Anomaly cluster id: {anom_cluster}")
 
-# Detection: a sample is flagged anomalous if it lands in the anomaly cluster
 y_pred_base = np.where(labels == normal_cluster, 1, -1)
 
 def detection_stats(y_true, y_pred, tag=""):
@@ -127,11 +113,8 @@ dist_before = np.linalg.norm(X_anom_scaled - normal_centroid, axis=1)
 print(f"  Avg distance (anom → normal centroid) BEFORE: {dist_before.mean():.4f}")
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# 3. CENTROID PROJECTION ATTACK
-# ══════════════════════════════════════════════════════════════════════════════
 print("\n" + "─" * 60)
-print("STEP 3 – Centroid Projection Attack")
+print("STEP 3 - Centroid Projection Attack")
 print("─" * 60)
 
 def centroid_projection_attack(X_victims_scaled, centroid, epsilon):
@@ -201,7 +184,7 @@ print(f"  Avg distance BEFORE: {dist_before.mean():.4f}")
 # 4.  PLOTS
 # ══════════════════════════════════════════════════════════════════════════════
 print("\n" + "─" * 60)
-print("STEP 4 – Generating plots")
+print("STEP 4 - Generating plots")
 print("─" * 60)
 
 pca = PCA(n_components=2, random_state=42)
