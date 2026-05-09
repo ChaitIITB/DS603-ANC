@@ -1,0 +1,85 @@
+{
+  "timestamp": "2026-05-05T15:25:50.079977",
+  "device": "cuda",
+  "config": {
+    "epochs": 30,
+    "poison_rate": 0.4,
+    "target_class": 0
+  },
+  "datasets": {
+    "WISDM": {
+      "dataset": "WISDM",
+      "config": {
+        "epochs": 30,
+        "poison_rate": 0.4,
+        "target_class": 0,
+        "seq_len": 80,
+        "n_channels": 6,
+        "n_classes": 6
+      },
+      "models": {
+        "linear": {
+          "clean_accuracy": 0.8204817451901227,
+          "poisoned_accuracy": 0.8185123466141494,
+          "attack_success_rate": 0.5334104046242775,
+          "parameters": 157574,
+          "asr_correct": 2307,
+          "asr_total": 4325
+        },
+        "cnn": {
+          "clean_accuracy": 0.8827450386305106,
+          "poisoned_accuracy": 0.879412210271171,
+          "attack_success_rate": 0.40115606936416187,
+          "parameters": 241734,
+          "asr_correct": 1735,
+          "asr_total": 4325
+        },
+        "lstm": {
+          "clean_accuracy": 0.879412210271171,
+          "poisoned_accuracy": 0.8725950613543403,
+          "attack_success_rate": 0.5072832369942196,
+          "parameters": 2248966,
+          "asr_correct": 2194,
+          "asr_total": 4325
+        }
+      }
+    },
+    "UCI_HAR": {
+      "dataset": "UCI_HAR",
+      "config": {
+        "epochs": 30,
+        "poison_rate": 0.4,
+        "target_class": 0,
+        "seq_len": 128,
+        "n_channels": 18,
+        "n_classes": 6
+      },
+      "models": {
+        "linear": {
+          "clean_accuracy": 0.9127926705123854,
+          "poisoned_accuracy": 0.9100780454699695,
+          "attack_success_rate": 0.6332109343125255,
+          "parameters": 624518,
+          "asr_correct": 1552,
+          "asr_total": 2451
+        },
+        "cnn": {
+          "clean_accuracy": 0.9362063115032236,
+          "poisoned_accuracy": 0.9216152019002375,
+          "attack_success_rate": 0.09220726234190127,
+          "parameters": 245574,
+          "asr_correct": 226,
+          "asr_total": 2451
+        },
+        "lstm": {
+          "clean_accuracy": 0.9216152019002375,
+          "poisoned_accuracy": 0.9155072955548015,
+          "attack_success_rate": 0.7180742554059567,
+          "parameters": 2252038,
+          "asr_correct": 1760,
+          "asr_total": 2451
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "timestamp": "2026-05-05T15:47:55.486862",
+  "device": "cuda",
+  "attack_type": "feature_collision",
+  "config": {
+    "epochs": 30,
+    "poison_rate": 0.3,
+    "target_class": 0,
+    "n_pgd_steps": 200,
+    "pgd_lr": 0.005,
+    "collision_weight": 0.7,
+    "trigger_strength": 0.3
+  },
+  "datasets": {}
+}
