@@ -1,0 +1,53 @@
+────────────────────────────────────────────────────────────
+STEP 1 – Loading ECG200
+────────────────────────────────────────────────────────────
+  ECG200 loaded  → 200 samples, 96 time steps
+  Train: 100  |  Test: 100
+  Normal (1): 133  |  Anomalous (-1): 67
+
+────────────────────────────────────────────────────────────
+STEP 2 – Fitting baseline K-Means (k=2) anomaly detector
+────────────────────────────────────────────────────────────
+  Normal cluster id : 1  (contains 114 normals)
+  Anomaly cluster id: 0
+  BEFORE attack                   DR=0.567  FPR=0.143  TP=38  FP=19  FN=29  TN=114
+  Avg distance (anom → normal centroid) BEFORE: 13.2082
+
+────────────────────────────────────────────────────────────
+STEP 3 – Centroid Projection Attack
+────────────────────────────────────────────────────────────
+  eps=3.0                         DR=0.493  FPR=0.143  TP=33  FP=19  FN=34  TN=114
+  eps=6.0                         DR=0.418  FPR=0.143  TP=28  FP=19  FN=39  TN=114
+  eps=10.0                        DR=0.090  FPR=0.143  TP=6  FP=19  FN=61  TN=114
+  eps=14.0                        DR=0.030  FPR=0.143  TP=2  FP=19  FN=65  TN=114
+  eps=18.0                        DR=0.000  FPR=0.143  TP=0  FP=19  FN=67  TN=114
+  eps=22.0                        DR=0.000  FPR=0.143  TP=0  FP=19  FN=67  TN=114
+
+  ✓ Chosen ε = 10.0  →  DR=0.090  (evasion rate=91.0%)
+  Avg distance (anom → normal centroid)  AFTER: 3.6322
+  Avg distance BEFORE: 13.2082
+
+────────────────────────────────────────────────────────────
+STEP 4 – Generating plots
+────────────────────────────────────────────────────────────
+  Plot saved.
+
+════════════════════════════════════════════════════════════
+RESULTS SUMMARY
+════════════════════════════════════════════════════════════
+                                    DR     FPR    Evaded    Dist→C
+──────────────────────────────────────────────────────────────
+  BEFORE attack                  0.567   0.143      29/67   13.2082
+  AFTER  ε=3.0                   0.493   0.143      34/67   10.2082
+  AFTER  ε=6.0                   0.418   0.143      39/67    7.2269
+  AFTER  ε=10.0                  0.090   0.143      61/67    3.6322
+  AFTER  ε=14.0                  0.030   0.143      65/67    1.2213
+  AFTER  ε=18.0                  0.000   0.143      67/67    0.2975
+  AFTER  ε=22.0                  0.000   0.143      67/67    0.0903
+════════════════════════════════════════════════════════════
+
+  ✓ At ε=10.0: 91.0% of anomalous samples evade detection
+  ✓ Perturbation is bounded — invisible at scale in the time series
+  ✓ False Positive Rate stays at 0.143 (normal samples unaffected)
+
+Done.

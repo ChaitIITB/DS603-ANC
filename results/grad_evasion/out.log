@@ -1,0 +1,41 @@
+=================================================================
+  GRADIENT-BASED EVASION  ·  ECG200  ·  IForest | LOF | DBSCAN
+=================================================================
+
+  Samples: 200  |  Normal: 133  |  Anomalous: 67
+
+── Fitting detectors ──────────────────────────────────────────────
+
+  Detector     Threshold   Baseline DR
+  IForest         0.0000         0.642
+  LOF             0.1087         0.627
+  DBSCAN         11.7127         0.642
+
+── PGD Attack  (ε=10.0, 20 steps, batched FD gradient) ─────────
+  Attack target    DR→IForest      DR→LOF   DR→DBSCAN
+  -------------------------------------------------------
+  Gradient→IForest          0.358       0.627       0.612
+  Gradient→LOF              0.149       0.284       0.164
+  Gradient→DBSCAN           0.104       0.388       0.119
+
+── ε-sweep (15 steps each, all detectors) ─────────────────────────
+  Sweeping target=IForest … done
+  Sweeping target=LOF … done
+  Sweeping target=DBSCAN … done
+
+=================================================================
+  DETECTION RATE SUMMARY  (lower = better evasion)
+=================================================================
+  Attack                     IForest         LOF      DBSCAN
+  ---------------------------------------------------------
+  Baseline                     0.642       0.627       0.642
+  Gradient→IForest             0.358       0.627       0.612
+  Gradient→LOF                 0.149       0.284       0.164
+  Gradient→DBSCAN              0.104       0.388       0.119
+=================================================================
+
+── Generating figures ──────────────────────────────────────────────
+  Main figure saved.
+  Signal overlay figure saved.
+
+All done.

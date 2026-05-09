@@ -1,0 +1,54 @@
+Loading ECG200 …
+Fitting detectors …
+
+  Detector     Baseline DR
+  KMeans             0.672
+  IForest            0.657
+  LOF                0.627
+  DBSCAN             0.642
+
+Attack 1 — Centroid Projection (ε=10.0)
+  KMeans      DR=0.015
+  IForest     DR=0.045
+  LOF         DR=0.284
+  DBSCAN      DR=0.015
+
+Attack 2 — SPSA-PGD per detector (ε=10.0, 30 steps)
+  → KMeans      KMeans=0.21  IForest=0.25  LOF=0.54  DBSCAN=0.19
+  → IForest     KMeans=0.57  IForest=0.21  LOF=0.63  DBSCAN=0.57
+  → LOF         KMeans=0.49  IForest=0.36  LOF=0.36  DBSCAN=0.42
+  → DBSCAN      KMeans=0.21  IForest=0.25  LOF=0.55  DBSCAN=0.21
+
+Attack 3 — Ensemble SPSA-PGD (ε=10.0, 35 steps)
+  KMeans      DR=0.552
+  IForest     DR=0.209
+  LOF         DR=0.597
+  DBSCAN      DR=0.567
+
+ε-sweep (ensemble, 20 steps each) …
+  ε=  2  avg_DR=0.552  KMeans=0.61  IForest=0.37  LOF=0.63  DBSCAN=0.60
+  ε=  5  avg_DR=0.530  KMeans=0.58  IForest=0.33  LOF=0.61  DBSCAN=0.60
+  ε=  8  avg_DR=0.541  KMeans=0.61  IForest=0.33  LOF=0.63  DBSCAN=0.60
+  ε= 10  avg_DR=0.507  KMeans=0.57  IForest=0.28  LOF=0.60  DBSCAN=0.58
+  ε= 13  avg_DR=0.530  KMeans=0.57  IForest=0.34  LOF=0.61  DBSCAN=0.60
+  ε= 16  avg_DR=0.541  KMeans=0.60  IForest=0.34  LOF=0.63  DBSCAN=0.60
+
+=================================================================
+  DETECTION RATE SUMMARY  (lower = better evasion)
+=================================================================
+  Attack                    KMeans     IForest         LOF      DBSCAN
+  --------------------------------------------------------------
+  Baseline                   0.672       0.657       0.627       0.642
+  Centroid Proj              0.015       0.045       0.284       0.015
+  Grad→KMeans                0.209       0.254       0.537       0.194
+  Grad→IForest               0.567       0.209       0.627       0.567
+  Grad→LOF                   0.493       0.358       0.358       0.418
+  Grad→DBSCAN                0.209       0.254       0.552       0.209
+  Ensemble                   0.552       0.209       0.597       0.567
+=================================================================
+
+Generating plots …
+  Main figure saved.
+  ε trade-off figure saved.
+
+All done.

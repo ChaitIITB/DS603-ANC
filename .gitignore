@@ -1,6 +1,5 @@
 processed_data/
 models_saved/
-results/
 plots/
 __pycache__/
 *.pyc
